@@ -1,5 +1,8 @@
-# === Data files ===git add data/df_var_1209.csv
+# === Data files ===
 data/*.parquet
+
+# (선택) data 폴더에 csv를 올리고 싶으면 아래 줄은 넣지 마세요
+# data/*.csv
 
 # === Virtual environment ===
 .venv/
