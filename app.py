@@ -5,7 +5,8 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-DATA_PATH = Path("data/df_var_1209.csv")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "data" / "df_var_1209.csv"
 
 
 @st.cache_data(show_spinner=False)
