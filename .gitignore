@@ -1,5 +1,4 @@
-# === Data files ===
-data/*.csv
+# === Data files ===git add data/df_var_1209.csv
 data/*.parquet
 
 # === Virtual environment ===
