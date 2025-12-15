@@ -279,7 +279,7 @@ def main() -> None:
     with tab1:
         # ---- Sidebar: 날짜 선택(YYYY-MM-DD로 깔끔하게) ----
         st.sidebar.header("설정")
-        unique_dates = sorted(pd.unique(df.index.date))
+        unique_dates = sorted(pd.unique(df.index.date), reverse=True)
 
         selected_date = st.sidebar.selectbox(
             "기준 날짜 선택",
