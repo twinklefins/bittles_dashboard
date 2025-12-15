@@ -326,75 +326,75 @@ def main() -> None:
             "m2": {"description": "글로벌 M2(YoY diff)", "higher_is_risky": False},
         }
 
-        cols = st.columns(len(indicators), gap="large")
-        total_score = 0
-        used = 0
-        signal_map: Dict[str, str] = {}
+            cols = st.columns(len(indicators), gap="large")
+            total_score = 0
+            used = 0
+            signal_map: Dict[str, str] = {}
 
-        for ui_col, (k, meta) in zip(cols, indicators.items()):
-            real_col = colmap.get(k)
-            if not real_col:
-                ui_col.warning(f"{meta['description']} 컬럼을 찾지 못했습니다.")
-                signal_map[k] = "⚪️"
-                continue
+            for ui_col, (k, meta) in zip(cols, indicators.items()):
+                real_col = colmap.get(k)
+                if not real_col:
+                    ui_col.warning(f"{meta['description']} 컬럼을 찾지 못했습니다.")
+                    signal_map[k] = "⚪️"
+                    continue
 
-            value = float(latest_row[real_col])
+                value = float(latest_row[real_col])
 
-            # ---- 지표별 신호 계산 ----
-            extra_line = ""  # metric 아래에 붙일 보조 정보(쏠림 등)
-            if k == "taker":
-                series = (df[real_col] - 0.5).abs()
-                v = abs(value - 0.5)
-                signal, score = percentile_signal(series, v, higher_is_risky=True)
+                # ---- 지표별 신호 계산 ----
+                extra_line = ""  # metric 아래에 붙일 보조 정보(쏠림 등)
+                if k == "taker":
+                    series = (df[real_col] - 0.5).abs()
+                    v = abs(value - 0.5)
+                    signal, score = percentile_signal(series, v, higher_is_risky=True)
 
-                # ✅ (핵심) metric 값은 짧게: 0.509 이런 식으로만
-                display_value = f"{value:.3f}"
-                extra_line = f"쏠림 |{v:.3f}| (0.5에서 멀수록 쏠림)"
-            elif k == "m2":
-                series = df[real_col].replace(0, pd.NA).dropna()
-                if value == 0:
-                    signal, score = "⚪️", 1
-                    display_value = "N/A"
-                    extra_line = "결측 가능(0값 처리)"
+                    # ✅ (핵심) metric 값은 짧게: 0.509 이런 식으로만
+                    display_value = f"{value:.3f}"
+                    extra_line = f"쏠림 |{v:.3f}| (0.5에서 멀수록 쏠림)"
+                elif k == "m2":
+                    series = df[real_col].replace(0, pd.NA).dropna()
+                    if value == 0:
+                        signal, score = "⚪️", 1
+                        display_value = "N/A"
+                        extra_line = "결측 가능(0값 처리)"
+                    else:
+                        signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
+                        display_value = f"{value:,.4g}"
                 else:
+                    series = df[real_col]
                     signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
                     display_value = f"{value:,.4g}"
-            else:
-                series = df[real_col]
-                signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
-                display_value = f"{value:,.4g}"
 
-            # ---- 전일 대비(DoD) 계산 ----
-            delta_txt = None
-            if prev_row is not None and real_col in prev_row.index:
-                try:
-                    prev_val = float(prev_row[real_col])
-                    if k == "m2" and (prev_val == 0 or value == 0):
-                        delta_txt = None
-                    else:
-                        delta_val = value - prev_val
-                        if k in ["funding", "taker", "m2"]:
-                            delta_txt = f"{delta_val:+.4f}"
+                # ---- 전일 대비(DoD) 계산 ----
+                delta_txt = None
+                if prev_row is not None and real_col in prev_row.index:
+                    try:
+                        prev_val = float(prev_row[real_col])
+                        if k == "m2" and (prev_val == 0 or value == 0):
+                            delta_txt = None
                         else:
-                            delta_txt = f"{delta_val:+,.0f}"
-                except Exception:
-                    delta_txt = None
+                            delta_val = value - prev_val
+                            if k in ["funding", "taker", "m2"]:
+                                delta_txt = f"{delta_val:+.4f}"
+                            else:
+                                delta_txt = f"{delta_val:+,.0f}"
+                    except Exception:
+                        delta_txt = None
 
-            signal_map[k] = signal
-            total_score += score
-            used += 1
+                signal_map[k] = signal
+                total_score += score
+                used += 1
 
-            # ✅ 라벨은 짧게(잘림 방지) + 실제 컬럼명은 caption으로
-            ui_col.metric(
-                label=f"{meta['description']}",
-                value=display_value,
-                delta=delta_txt,
-            )
-            ui_col.caption(f"컬럼: `{real_col}`  ·  신호: {signal}")
-            if extra_line:
-                ui_col.caption(extra_line)
+                # ✅ 라벨은 짧게(잘림 방지) + 실제 컬럼명은 caption으로
+                ui_col.metric(
+                    label=f"{meta['description']}",
+                    value=display_value,
+                    delta=delta_txt,
+                )
+                ui_col.caption(f"컬럼: `{real_col}`  ·  신호: {signal}")
+                if extra_line:
+                    ui_col.caption(extra_line)
 
-            value = float(latest_row[real_col])
+                value = float(latest_row[real_col])
 
             # ---- 지표별 신호 계산 ----
             if k == "taker":
