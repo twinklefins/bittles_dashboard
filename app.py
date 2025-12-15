@@ -1,18 +1,27 @@
 import math
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
+# VAR / IRF / FEVD
+from statsmodels.tsa.api import VAR
+
+import matplotlib.pyplot as plt
+
+
+# ======================
+# Paths
+# ======================
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "data" / "df_var_1209.csv"
 
 
-# -----------------------------
-# Data
-# -----------------------------
+# ======================
+# Data loader
+# ======================
 @st.cache_data(show_spinner=False)
 def load_data(path: Path) -> pd.DataFrame:
     """Load the CSV into a DataFrame with a datetime index."""
@@ -21,15 +30,15 @@ def load_data(path: Path) -> pd.DataFrame:
             "데이터 파일을 찾을 수 없습니다. 'data/df_var_1209.csv' 경로를 확인해주세요. "
             "샘플 데이터로 화면을 구성합니다."
         )
-        sample_index = pd.date_range(end=pd.Timestamp.utcnow().normalize(), periods=180, freq="D")
+        sample_index = pd.date_range(end=pd.Timestamp.utcnow().normalize(), periods=200, freq="D")
         return pd.DataFrame(
             {
-                "ret_log_1d": [0.0002 * ((i % 11) - 5) for i in range(180)],
-                "oi_close_diff": pd.Series(range(180)).mul(5e7).tolist(),
-                "funding_close": [0.00003 + (i % 10) * 0.00002 for i in range(180)],
-                "liq_total_usd_diff": [2e7 + (i % 12) * 1e7 for i in range(180)],
-                "taker_buy_ratio": [0.5 + ((i % 14) - 7) * 0.01 for i in range(180)],
-                "global_m2_yoy_diff": [0.02 if i % 7 else 0 for i in range(180)],
+                "ret_log_1d": np.random.normal(0, 0.02, size=len(sample_index)),
+                "oi_close_diff": pd.Series(range(len(sample_index))).mul(1e8).tolist(),
+                "funding_close": [0.00005 + (i % 10) * 0.00002 for i in range(len(sample_index))],
+                "liq_total_usd_diff": [2e7 + (i % 12) * 1e7 for i in range(len(sample_index))],
+                "taker_buy_ratio": [0.5 + ((i % 14) - 7) * 0.01 for i in range(len(sample_index))],
+                "global_m2_yoy_diff": [0.03 if i % 7 else 0 for i in range(len(sample_index))],
             },
             index=sample_index,
         )
@@ -40,12 +49,13 @@ def load_data(path: Path) -> pd.DataFrame:
 
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time"]).set_index("time").sort_index()
+
     return df
 
 
-# -----------------------------
-# Risk Signal utilities
-# -----------------------------
+# ======================
+# Risk signal helpers
+# ======================
 def percentile_signal(series: pd.Series, value: float, higher_is_risky: bool = True) -> Tuple[str, int]:
     """Return an emoji signal and numeric score based on percentile thresholds.
     Scores: green=0, yellow=1, red=2. Neutral/unknown=⚪️(score 1)
@@ -119,184 +129,142 @@ def build_cause_summary(signals: Dict[str, str]) -> str:
     return "\n\n".join(lines)
 
 
-# -----------------------------
-# Pipeline tab utilities
-# -----------------------------
-def get_analysis_pipeline() -> Dict[str, List[str]]:
-    """1210_VAR_시범.py의 흐름을 '카테고리'로 묶어 지도 형태로 보여주기."""
+# ======================
+# VAR helpers
+# ======================
+def zscore_df(df: pd.DataFrame) -> pd.DataFrame:
+    mean = df.mean()
+    std = df.std().replace(0, np.nan)
+    return (df - mean) / std
+
+
+def run_var_bundle(
+    df: pd.DataFrame,
+    selected_cols: List[str],
+    target: str,
+    lag: int,
+    horizon: int,
+    standardize: bool,
+) -> Dict[str, object]:
+    """
+    Fit VAR and produce:
+    - granger_table: DataFrame (x -> target)
+    - irf_result: IRF object
+    - fevd_table_target: DataFrame (steps x impulses) for target only
+    - var_results: VARResults
+    """
+    if len(selected_cols) < 2:
+        raise ValueError("VAR 변수는 2개 이상 선택해야 합니다.")
+
+    if target not in selected_cols:
+        raise ValueError("타겟(반응) 변수는 선택된 VAR 변수 안에 있어야 합니다.")
+
+    data = df[selected_cols].copy()
+    data = data.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if data.shape[0] < max(50, lag * 10):
+        raise ValueError(f"데이터가 너무 적습니다. (현재 {data.shape[0]} rows). lag={lag}면 최소 50~100행 권장")
+
+    if standardize:
+        data = zscore_df(data).dropna()
+
+    model = VAR(data)
+    results = model.fit(lag)
+
+    # ---- Granger: x -> target (p-value)
+    rows = []
+    for x in selected_cols:
+        if x == target:
+            continue
+        try:
+            test = results.test_causality(caused=target, causing=[x], kind="f")
+            rows.append(
+                {
+                    "causing(x)": x,
+                    "caused(target)": target,
+                    "test": "F",
+                    "stat": float(test.test_statistic),
+                    "pvalue": float(test.pvalue),
+                    "df_denom": getattr(test, "df_denom", None),
+                    "df_num": getattr(test, "df_num", None),
+                }
+            )
+        except Exception as e:
+            rows.append(
+                {
+                    "causing(x)": x,
+                    "caused(target)": target,
+                    "test": "F",
+                    "stat": np.nan,
+                    "pvalue": np.nan,
+                    "df_denom": None,
+                    "df_num": None,
+                    "error": str(e),
+                }
+            )
+    granger_df = pd.DataFrame(rows).sort_values("pvalue", na_position="last").reset_index(drop=True)
+
+    # ---- IRF
+    irf = results.irf(horizon)
+
+    # ---- FEVD to target (steps x impulses)
+    fevd = results.fevd(horizon)
+    # fevd.decomp shape: (horizon+1, neq, neq) or (horizon, neq, neq) depending
+    decomp = np.array(fevd.decomp)
+
+    varnames = list(results.names)
+    if target not in varnames:
+        raise ValueError("VAR 결과에서 target 변수를 찾지 못했습니다.")
+
+    target_idx = varnames.index(target)
+
+    # steps 축 처리(0 포함할 수 있어 0 제외하고 1..horizon로 표기)
+    # decomp[t, response, impulse]
+    # t=0이 포함되면 제거
+    steps = list(range(decomp.shape[0]))
+    if 0 in steps:
+        # drop step 0 for nicer display
+        decomp_use = decomp[1:, :, :]
+        step_labels = list(range(1, decomp.shape[0]))
+    else:
+        decomp_use = decomp
+        step_labels = list(range(1, decomp.shape[0] + 1))
+
+    fevd_target = decomp_use[:, target_idx, :]  # (steps, impulse_vars)
+    fevd_table = pd.DataFrame(fevd_target, columns=varnames, index=step_labels)
+    fevd_table = (fevd_table * 100.0).round(2)
+    fevd_table.index.name = "horizon(step)"
+
     return {
-        "데이터 준비": [
-            "CSV 로드 (time → datetime index)",
-            "결측/이상치 처리, 정렬",
-            "분석 대상 변수 선택/매핑 (Risk / VAR 공통)",
-        ],
-        "전처리 & 정상성": [
-            "수익률/차분 등 변환(필요 시)",
-            "정상성 확인(ADF Test) 및 변환 결정",
-        ],
-        "VAR 모델링": [
-            "VAR 입력 데이터 구성(선택 변수 집합)",
-            "Lag 선택(AIC/BIC 등) 및 VAR 적합",
-            "Granger 인과성 테스트",
-        ],
-        "IRF / FEVD": [
-            "IRF(충격 반응) 시각화",
-            "FEVD(분산분해) 표로 기여도 출력",
-            "요약 인사이트 생성(어떤 요인이 컸는지)",
-        ],
-        "대시보드 출력": [
-            "Risk Signal(🟢🟡🔴) + 패닉셀 방지 메시지",
-            "VAR Insight(Granger/IRF/FEVD) 결과 제공",
-            "공유(Cloud 링크/README/데이터 공유 정책)",
-        ],
+        "granger_table": granger_df,
+        "irf": irf,
+        "fevd_table_target": fevd_table,
+        "var_results": results,
+        "var_data_rows": data.shape[0],
     }
 
 
-def render_pipeline_visual(pipeline: Dict[str, List[str]]) -> None:
-    """Graphviz 있으면 흐름도, 없으면 텍스트로 표시."""
-    st.subheader("🧭 분석 파이프라인 전체 보기")
-    st.caption("Risk Signal / VAR Insight가 어떤 분석 단계를 거쳐 만들어지는지 설명하는 지도입니다.")
-
-    try:
-        import graphviz  # type: ignore
-
-        dot = graphviz.Digraph()
-        dot.attr(rankdir="LR")
-
-        dot.attr("node", shape="box", style="rounded,filled", fillcolor="lightgrey")
-        categories = list(pipeline.keys())
-        for c in categories:
-            dot.node(c, c)
-
-        dot.attr("node", shape="box", style="rounded,filled", fillcolor="white")
-        for c, steps in pipeline.items():
-            prev = c
-            for i, s in enumerate(steps, start=1):
-                sid = f"{c}_{i}"
-                dot.node(sid, f"{i}. {s}")
-                dot.edge(prev, sid)
-                prev = sid
-
-        st.graphviz_chart(dot, use_container_width=True)
-
-    except Exception:
-        st.info("ℹ️ Graphviz가 없어 텍스트로 표시합니다. (원하면 requirements.txt에 graphviz 추가)")
-        for c, steps in pipeline.items():
-            st.markdown(f"### {c}")
-            for i, s in enumerate(steps, start=1):
-                st.markdown(f"- {i}. {s}")
-
-    st.divider()
-    st.subheader("카테고리별 단계(체크리스트)")
-    st.caption("팀 내부에서 ‘어디까지 구현/검증됐는지’ 표시용으로 사용할 수 있습니다.")
-    for c, steps in pipeline.items():
-        with st.expander(f"📌 {c}", expanded=(c == "IRF / FEVD")):
-            for s in steps:
-                st.checkbox(s, value=False, key=f"pipeline_{c}_{s}")
-
-
-# -----------------------------
-# VAR / Granger / IRF / FEVD
-# -----------------------------
-@dataclass
-class VarOutputs:
-    granger_matrix: pd.DataFrame
-    granger_to_target: pd.DataFrame
-    fevd_table: pd.DataFrame
-    irf_fig: Optional["object"]  # matplotlib Figure (typing 회피)
-
-
-def _zscore(df: pd.DataFrame) -> pd.DataFrame:
-    return (df - df.mean()) / (df.std(ddof=0).replace(0, pd.NA))
-
-
-@st.cache_data(show_spinner=False)
-def run_var_bundle(
-    df: pd.DataFrame,
-    cols: List[str],
-    target: str,
-    maxlags: int,
-    horizon: int,
-    standardize: bool,
-) -> VarOutputs:
-    """Run VAR and return Granger matrix/table, IRF figure, FEVD table."""
-    # lazy import (Cloud에서 requirements 없을 때 에러 메시지 깔끔하게)
-    from statsmodels.tsa.api import VAR
-    from statsmodels.tsa.stattools import grangercausalitytests
-
-    import matplotlib.pyplot as plt  # noqa: F401
-
-    x = df[cols].copy().dropna()
-    if len(x) < (maxlags + 25):
-        raise ValueError(f"VAR 실행을 위한 데이터 길이가 부족합니다. dropna 후 {len(x)}행 (lag={maxlags})")
-
-    if standardize:
-        x = _zscore(x).dropna()
-
-    model = VAR(x)
-    res = model.fit(maxlags=maxlags)
-
-    # ---- Granger Matrix (pairwise p-values) ----
-    pvals = pd.DataFrame(index=cols, columns=cols, dtype=float)
-    for caused in cols:
-        for causing in cols:
-            if caused == causing:
-                pvals.loc[caused, causing] = float("nan")
-                continue
-            try:
-                test = res.test_causality(caused=caused, causing=[causing], kind="f")
-                pvals.loc[caused, causing] = float(test.pvalue)
-            except Exception:
-                pvals.loc[caused, causing] = float("nan")
-    granger_matrix = pvals
-
-    # ---- Granger to target (stable, based on grangercausalitytests) ----
-    rows = []
-    causes = [c for c in cols if c != target]
-    for c in causes:
-        try:
-            g = grangercausalitytests(x[[target, c]], maxlag=maxlags, verbose=False)
-            # 선택 lag의 p-value
-            p = float(g[maxlags][0]["ssr_ftest"][1])
-        except Exception:
-            p = float("nan")
-        rows.append({"cause": c, "target": target, "lag": maxlags, "p_value": p})
-    granger_to_target = pd.DataFrame(rows).sort_values("p_value")
-
-    # ---- IRF ----
-    irf_fig = None
-    try:
-        irf = res.irf(horizon)
-        fig = irf.plot(orth=False)
-        if fig is not None:
-            fig.suptitle("IRF (Impulse Response Functions)", fontsize=12)
-            irf_fig = fig
-    except Exception:
-        irf_fig = None
-
-    # ---- FEVD (last horizon summary) ----
-    fevd = res.fevd(horizon)
-    # horizon 마지막 시점의 분산분해 (k x k)
-    decomp = fevd.decomp[-1]
-    fevd_table = pd.DataFrame(decomp, index=cols, columns=cols)
-    fevd_table.index.name = "Explained (target)"
-    fevd_table.columns.name = "Explainer (shock)"
-
-    return VarOutputs(
-        granger_matrix=granger_matrix,
-        granger_to_target=granger_to_target,
-        fevd_table=fevd_table,
-        irf_fig=irf_fig,
-    )
-
-
-# -----------------------------
-# App
-# -----------------------------
 def main() -> None:
     st.set_page_config(page_title="시장 위험도 대시보드", page_icon="📊", layout="wide")
+    # --- (추가) UI 다듬기용 CSS ---
+    st.markdown(
+        """
+        <style>
+        /* 전체 여백/타이포 정리 */
+        .block-container { padding-top: 1.2rem; padding-bottom: 2.2rem; }
+        h1 { margin-bottom: 0.25rem; }
+        /* metric label 줄바꿈 허용 + 폰트 살짝 줄이기 */
+        [data-testid="stMetricLabel"] { white-space: normal; font-size: 0.9rem; }
+        /* metric value 너무 커서 답답한 느낌 완화 */
+        [data-testid="stMetricValue"] { font-size: 1.55rem; }
+        /* sidebar 간격 */
+        section[data-testid="stSidebar"] .block-container { padding-top: 1.1rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("📊 시장 위험도 대시보드")
-    st.caption("선택한 날짜 기준으로 주요 지표를 신호등(🟢🟡🔴)으로 확인하고, VAR 기반(Granger/IRF/FEVD) 인사이트를 제공합니다.")
+    st.caption("선택한 날짜 기준으로 주요 지표를 신호등(🟢🟡🔴) 형태로 확인하고, VAR 기반(Granger/IRF/FEVD) 인사이트를 제공합니다.")
 
     df = load_data(DATA_PATH)
     if df.empty:
@@ -305,10 +273,11 @@ def main() -> None:
 
     tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧩 VAR Insight", "🧭 분석 파이프라인"])
 
-    # -------------------------
-    # Tab1: Risk Signal
-    # -------------------------
+    # ======================
+    # Tab 1: Risk Signal
+    # ======================
     with tab1:
+        # ---- Sidebar: 날짜 선택(YYYY-MM-DD로 깔끔하게) ----
         st.sidebar.header("설정")
         unique_dates = sorted(pd.unique(df.index.date))
 
@@ -317,23 +286,30 @@ def main() -> None:
             options=unique_dates,
             index=len(unique_dates) - 1,
             format_func=lambda d: d.strftime("%Y-%m-%d"),
+            key="risk_date",
         )
 
-        selected_df = df[df.index.date == selected_date]
-        latest_row = selected_df.iloc[-1] if not selected_df.empty else df.iloc[-1]
+        selected_mask = (df.index.date == selected_date)
+        selected_df = df[selected_mask] if selected_mask.any() else df
+        latest_row = selected_df.iloc[-1]
 
+        # ---- 전일 row 구하기 ----
         date_idx = unique_dates.index(selected_date)
         prev_date = unique_dates[date_idx - 1] if date_idx > 0 else None
-        prev_row = None
+
         if prev_date is not None:
-            prev_df = df[df.index.date == prev_date]
-            prev_row = prev_df.iloc[-1] if not prev_df.empty else None
+            prev_mask = (df.index.date == prev_date)
+            prev_df = df[prev_mask] if prev_mask.any() else df
+            prev_row = prev_df.iloc[-1]
+        else:
+            prev_row = None
 
         st.subheader(f"기준 데이터 날짜: {latest_row.name:%Y-%m-%d %H:%M:%S}")
 
         with st.expander("컬럼 목록 보기(문제 해결용)"):
             st.write(list(df.columns))
 
+        # ---- 컬럼 매핑(자동 탐지) ----
         colmap: Dict[str, Optional[str]] = {
             "oi": find_column(df, ["oi_close_diff", "oi_diff", "open_interest_diff", "oi", "OI"]),
             "funding": find_column(df, ["funding_close", "funding", "funding_rate", "Funding"]),
@@ -350,12 +326,12 @@ def main() -> None:
             "m2": {"description": "글로벌 M2(YoY diff)", "higher_is_risky": False},
         }
 
-        cols_ui = st.columns(len(indicators))
+        cols = st.columns(len(indicators), gap="large")
         total_score = 0
         used = 0
         signal_map: Dict[str, str] = {}
 
-        for ui_col, (k, meta) in zip(cols_ui, indicators.items()):
+        for ui_col, (k, meta) in zip(cols, indicators.items()):
             real_col = colmap.get(k)
             if not real_col:
                 ui_col.warning(f"{meta['description']} 컬럼을 찾지 못했습니다.")
@@ -364,6 +340,63 @@ def main() -> None:
 
             value = float(latest_row[real_col])
 
+            # ---- 지표별 신호 계산 ----
+            extra_line = ""  # metric 아래에 붙일 보조 정보(쏠림 등)
+            if k == "taker":
+                series = (df[real_col] - 0.5).abs()
+                v = abs(value - 0.5)
+                signal, score = percentile_signal(series, v, higher_is_risky=True)
+
+                # ✅ (핵심) metric 값은 짧게: 0.509 이런 식으로만
+                display_value = f"{value:.3f}"
+                extra_line = f"쏠림 |{v:.3f}| (0.5에서 멀수록 쏠림)"
+            elif k == "m2":
+                series = df[real_col].replace(0, pd.NA).dropna()
+                if value == 0:
+                    signal, score = "⚪️", 1
+                    display_value = "N/A"
+                    extra_line = "결측 가능(0값 처리)"
+                else:
+                    signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
+                    display_value = f"{value:,.4g}"
+            else:
+                series = df[real_col]
+                signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
+                display_value = f"{value:,.4g}"
+
+            # ---- 전일 대비(DoD) 계산 ----
+            delta_txt = None
+            if prev_row is not None and real_col in prev_row.index:
+                try:
+                    prev_val = float(prev_row[real_col])
+                    if k == "m2" and (prev_val == 0 or value == 0):
+                        delta_txt = None
+                    else:
+                        delta_val = value - prev_val
+                        if k in ["funding", "taker", "m2"]:
+                            delta_txt = f"{delta_val:+.4f}"
+                        else:
+                            delta_txt = f"{delta_val:+,.0f}"
+                except Exception:
+                    delta_txt = None
+
+            signal_map[k] = signal
+            total_score += score
+            used += 1
+
+            # ✅ 라벨은 짧게(잘림 방지) + 실제 컬럼명은 caption으로
+            ui_col.metric(
+                label=f"{meta['description']}",
+                value=display_value,
+                delta=delta_txt,
+            )
+            ui_col.caption(f"컬럼: `{real_col}`  ·  신호: {signal}")
+            if extra_line:
+                ui_col.caption(extra_line)
+
+            value = float(latest_row[real_col])
+
+            # ---- 지표별 신호 계산 ----
             if k == "taker":
                 series = (df[real_col] - 0.5).abs()
                 v = abs(value - 0.5)
@@ -384,10 +417,12 @@ def main() -> None:
                 signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
                 display_value = f"{value:,.4g}"
 
+            # ---- 전일 대비(DoD) 계산 ----
             delta_txt = "전일: N/A"
             if prev_row is not None and real_col in prev_row.index:
                 try:
                     prev_val = float(prev_row[real_col])
+
                     if k == "m2" and (prev_val == 0 or value == 0):
                         delta_txt = "전일: N/A"
                     else:
@@ -411,14 +446,16 @@ def main() -> None:
             ui_col.caption(f"신호: {signal}")
 
         st.divider()
+
         st.subheader("신호등 요약")
         st.write("🟢 낮음 | 🟡 중간 | 🔴 높음 | ⚪️ 데이터 부족/결측 가능")
 
         if used == 0:
-            st.error("핵심 지표 컬럼을 하나도 찾지 못했습니다. 컬럼명을 확인해 매핑 후보를 추가해주세요.")
+            st.error("핵심 지표 컬럼을 하나도 찾지 못했습니다. '컬럼 목록 보기'에서 실제 컬럼명을 확인해 매핑 후보를 추가해주세요.")
             return
 
-        st.success(overall_risk_text(total_score, used))
+        overall_text = overall_risk_text(total_score, used)
+        st.success(overall_text)
 
         st.subheader("오늘의 원인 요약(자동)")
         st.info(build_cause_summary(signal_map))
@@ -426,123 +463,160 @@ def main() -> None:
         with st.expander("원본 데이터 미리보기"):
             st.dataframe(df.tail(50))
 
-    # -------------------------
-    # Tab2: VAR Insight (Granger / IRF / FEVD)
-    # -------------------------
+    # ======================
+    # Tab 2: VAR Insight
+    # ======================
     with tab2:
         st.subheader("🧩 VAR Insight")
-        st.caption("Granger 인과 테스트(표) / IRF(그래프) / FEVD 분산분해(표)")
+        st.caption("Granger 인과테스트(표) / IRF(그래프) / FEVD 분산분해(표)를 한 번에 확인합니다.")
 
-        # 추천 변수셋(있으면 자동 포함)
-        recommended = [
-            "ret_log_1d",
-            "oi_close_diff",
-            "funding_close",
-            "liq_total_usd_diff",
-            "taker_buy_ratio",
-            "sth_sopr",
-            "lth_sopr",
-            "sth_realized_price_usd_diff",
-            "lth_realized_price_usd_diff",
-            "rhodl_ratio",
-            "global_m2_yoy_diff",
-            "sp500_ret",
-            "nasdaq_ret",
-            "etf_aum_diff",
-            "etf_flow_shock_pos",
-            "etf_flow_shock_neg",
-        ]
-        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        available = [c for c in recommended if c in numeric_cols]
-        if "ret_log_1d" not in numeric_cols:
-            st.error("CSV에 ret_log_1d 컬럼이 없습니다. VAR/IRF/FEVD 타겟을 바꾸거나 컬럼명을 확인해주세요.")
-            st.stop()
-
-        # 사이드바 설정
+        # ---- Sidebar: VAR controls ----
         st.sidebar.header("VAR 설정")
-        default_cols = available if len(available) >= 5 else (["ret_log_1d"] + numeric_cols[:6])
+
+        # 추천 후보 컬럼들(있는 것만 자동 포함)
+        default_candidates = [c for c in ["ret_log_1d", "oi_close_diff", "funding_close", "liq_total_usd_diff", "taker_buy_ratio", "global_m2_yoy_diff"] if c in df.columns]
+        all_numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+
         selected_cols = st.sidebar.multiselect(
             "VAR 변수 선택(2개 이상)",
-            options=numeric_cols,
-            default=list(dict.fromkeys([c for c in default_cols if c in numeric_cols]))[:10],
+            options=all_numeric_cols,
+            default=default_candidates[:4] if len(default_candidates) >= 2 else all_numeric_cols[:3],
         )
-        target = st.sidebar.selectbox("타겟(반응) 변수", options=selected_cols if selected_cols else ["ret_log_1d"], index=0)
-        maxlags = st.sidebar.slider("VAR lag", min_value=1, max_value=14, value=1)
+
+        if selected_cols:
+            target = st.sidebar.selectbox("타겟(반응) 변수", options=selected_cols, index=0)
+            impulse_options = [c for c in selected_cols if c != target]
+            impulse_var = st.sidebar.selectbox("IRF Impulse(충격) 변수", options=impulse_options, index=0 if impulse_options else 0)
+        else:
+            target = None
+            impulse_var = None
+
+        lag = st.sidebar.slider("VAR lag", min_value=1, max_value=10, value=1)
         horizon = st.sidebar.slider("IRF/FEVD horizon", min_value=5, max_value=30, value=10)
         standardize = st.sidebar.checkbox("표준화(z-score) 후 VAR 적합", value=True)
-
-        if len(selected_cols) < 2:
-            st.warning("VAR 실행을 위해 변수 2개 이상을 선택해주세요.")
-            st.stop()
-        if target not in selected_cols:
-            st.warning("타겟 변수는 선택된 VAR 변수 목록 안에 있어야 합니다.")
-            st.stop()
+        show_full_grid = st.sidebar.checkbox("IRF 전체 그리드(변수×변수)도 보기", value=False)
 
         run_btn = st.button("VAR 실행(Granger / IRF / FEVD)", type="primary")
 
+        if "var_out" not in st.session_state:
+            st.session_state["var_out"] = None
+        if "var_params" not in st.session_state:
+            st.session_state["var_params"] = None
+
         if run_btn:
             try:
-                out = run_var_bundle(
-                    df=df,
-                    cols=selected_cols,
-                    target=target,
-                    maxlags=maxlags,
-                    horizon=horizon,
-                    standardize=standardize,
-                )
-
-                # --- Granger (target 중심) ---
-                st.subheader("1) Granger 인과 테스트 (타겟 기준 p-value)")
-                st.caption("p-value가 낮을수록 ‘cause → target’ 인과성 신호로 해석합니다. (보수적으로 해석 권장)")
-                st.dataframe(out.granger_to_target.style.format({"p_value": "{:.4f}"}), use_container_width=True)
-
-                with st.expander("Granger p-value 전체 매트릭스 보기(advanced)"):
-                    st.dataframe(out.granger_matrix.style.format("{:.4f}"), use_container_width=True)
-
-                st.divider()
-
-                # --- IRF ---
-                st.subheader("2) IRF (Impulse Response Functions)")
-                st.caption("기본은 전체 IRF. 발표용으로는 ‘impulse 선택 → target 반응’ 1개만 보여줘도 좋아요.")
-                if out.irf_fig is None:
-                    st.warning("IRF 그래프 생성에 실패했습니다. (결측/lag/horizon/변수 수를 조정해보세요.)")
-                else:
-                    st.pyplot(out.irf_fig, clear_figure=True)
-
-                st.divider()
-
-                # --- FEVD ---
-                st.subheader("3) FEVD 분산분해 (기여도)")
-                st.caption("선택한 horizon의 ‘마지막 스텝’ 기준 기여도입니다. (행=설명되는 변수, 열=충격 제공 변수)")
-                st.dataframe(out.fevd_table.style.format("{:.3f}"), use_container_width=True)
-
-                st.info(
-                    "해석 팁: target 행에서 값이 큰 열(변수)이 ‘target 변동을 많이 설명하는 shock’로 해석될 수 있습니다."
-                )
-
-            except ModuleNotFoundError as e:
-                st.error(f"필요 라이브러리가 없습니다: {e}")
-                st.info("requirements.txt에 statsmodels, matplotlib를 추가하고 재배포하세요.")
+                with st.spinner("VAR 적합 중… (조금 걸릴 수 있어요)"):
+                    out = run_var_bundle(
+                        df=df,
+                        selected_cols=selected_cols,
+                        target=target,
+                        lag=lag,
+                        horizon=horizon,
+                        standardize=standardize,
+                    )
+                st.session_state["var_out"] = out
+                st.session_state["var_params"] = {
+                    "selected_cols": selected_cols,
+                    "target": target,
+                    "impulse_var": impulse_var,
+                    "lag": lag,
+                    "horizon": horizon,
+                    "standardize": standardize,
+                    "show_full_grid": show_full_grid,
+                }
+                st.success(f"완료! (학습 데이터 rows: {out['var_data_rows']})")
             except Exception as e:
-                st.error(f"VAR/Granger/IRF/FEVD 실행 중 오류: {e}")
-                st.info("해결 팁: (1) 변수 수를 3~6개로 줄이기 (2) lag=1부터 시작 (3) horizon 10~15 (4) 표준화 on/off 변경")
+                st.error(f"VAR 실행 실패: {e}")
+                st.session_state["var_out"] = None
+                st.session_state["var_params"] = None
 
-    # -------------------------
-    # Tab3: Pipeline
-    # -------------------------
+        # ---- Render results if exists
+        out = st.session_state.get("var_out")
+        params = st.session_state.get("var_params")
+
+        if out is None:
+            st.info("왼쪽에서 변수 선택 후 **VAR 실행** 버튼을 눌러주세요.")
+        else:
+            # 1) Granger table
+            st.subheader("1) Granger 인과테스트 (x → target)")
+            st.caption("p-value가 작을수록 ‘x가 target을 그랜저 인과한다’는 근거가 강합니다(통상 0.05 기준).")
+            st.dataframe(out["granger_table"], use_container_width=True)
+
+            st.divider()
+
+            # 2) IRF (nice: impulse 1 -> target 1)
+            st.subheader("2) IRF (Impulse Response Functions)")
+            st.caption("데모용으로는 ‘impulse 1개 → target 1개’만 크게 보여주는 게 가장 읽기 좋아요.")
+
+            irf = out["irf"]
+            imp = params.get("impulse_var")
+            tgt = params.get("target")
+            h = params.get("horizon", 10)
+
+            if imp is None or tgt is None:
+                st.warning("IRF를 위해 impulse/target 설정이 필요합니다.")
+            else:
+                # ✅ 1개 impulse -> 1개 target
+                fig = irf.plot(impulse=imp, response=tgt)
+                fig.set_size_inches(9, 4)
+                fig.tight_layout()
+                st.pyplot(fig, clear_figure=True)
+
+                # (옵션) full grid
+                if params.get("show_full_grid", False):
+                    st.caption("전체 그리드는 변수가 많으면 겹쳐 보일 수 있어요.")
+                    fig2 = irf.plot()
+                    fig2.set_size_inches(12, 10)
+                    fig2.tight_layout()
+                    st.pyplot(fig2, clear_figure=True)
+
+            st.divider()
+
+            # 3) FEVD table
+            st.subheader("3) FEVD 분산분해 (target 기준)")
+            st.caption("각 horizon에서 target 변동을 ‘어떤 shock(변수)이 얼마나 설명하는지(%)’를 보여줍니다.")
+            st.dataframe(out["fevd_table_target"], use_container_width=True)
+
+    # ======================
+    # Tab 3: Pipeline visualization
+    # ======================
     with tab3:
-        pipeline = get_analysis_pipeline()
-        render_pipeline_visual(pipeline)
-        st.divider()
+        st.subheader("🧭 분석 파이프라인 (전체 흐름 시각화)")
+        st.caption("팀 요청대로, 대시보드가 ‘어떤 순서로 분석을 수행하는지’를 한 눈에 보여주는 뷰입니다.")
+
         st.markdown(
             """
-**이 탭의 목적**  
-- 팀원/멘토가 “Risk Signal / VAR Insight가 어떤 분석 과정을 통해 나오는지”를 즉시 이해하도록 돕습니다.  
-- 1210_VAR_시범.py의 연구/실험 코드는 유지하되, 대시보드에서는 “과정 지도 + 결과 출력” 형태로 설명합니다.
+### ✅ 전체 분석 단계
+
+1. **데이터 로드**
+   - `data/df_var_1209.csv` 로드 → `time` 기준 정렬
+
+2. **Risk Signal (신호등)**
+   - OI / Funding / Liquidation / Taker / M2 지표
+   - 분위수(33%/66%) 기반 🟢🟡🔴 신호 생성
+   - 전일 대비 변화 + 원인 요약(자동 메시지)
+
+3. **VAR Insight (인사이트)**
+   - (사용자 선택) 변수 2개 이상 선택
+   - (선택) z-score 표준화
+   - VAR(lag) 적합
+   - **Granger**: `x → target` 인과테스트 결과 표
+   - **IRF**: (impulse 1개 → target 1개) 반응 그래프
+   - **FEVD**: target 분산 분해(%) 표
+
+---
+
+### 🧩 데모용 추천 사용법 (멘토/팀원 발표 기준)
+
+- Target(반응): `ret_log_1d`
+- Impulse(충격): `liq_total_usd_diff` 또는 `funding_close` 또는 `oi_close_diff`
+- Lag: 1~2
+- Horizon: 10
+
+👉 이렇게 설정하면 ‘청산/펀딩/레버리지 충격이 수익률에 미치는 동학’을 **깔끔하게 1장 그래프로** 보여줄 수 있습니다.
 """
         )
 
 
 if __name__ == "__main__":
     main()
-
