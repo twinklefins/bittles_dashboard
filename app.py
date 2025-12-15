@@ -111,6 +111,88 @@ def build_cause_summary(signals: Dict[str, str]) -> str:
     return "\n\n".join(lines)
 
 
+def get_analysis_pipeline() -> Dict[str, List[str]]:
+    """
+    1210_VAR_시범.py의 분석 흐름을 '카테고리'로 묶어
+    팀/멘토가 한눈에 이해할 수 있도록 파이프라인화한 구조.
+    """
+    return {
+        "데이터 준비": [
+            "CSV 로드 (time → datetime index)",
+            "결측/이상치 처리, 정렬",
+            "분석 대상 변수 선택/매핑 (OI/Funding/Liq/Taker/M2 등)",
+        ],
+        "전처리 & 정상성": [
+            "변수 스케일/차분/로그수익률 생성(필요 시)",
+            "정상성 확인(ADF Test) 및 변환 결정",
+        ],
+        "VAR 모델링": [
+            "VAR 입력 데이터 구성(선택 변수 집합)",
+            "Lag 선택(AIC/BIC 등) 및 VAR 적합",
+            "Granger 인과성 테스트(옵션)",
+        ],
+        "IRF / FEVD": [
+            "IRF(Impulse Response)로 충격 반응 분석",
+            "FEVD(분산분해)로 기여도 분해",
+            "문장형 인사이트 요약(무슨 요인이 컸는지)",
+        ],
+        "대시보드 출력": [
+            "Risk Signal(🟢🟡🔴) 산출 및 요약 메시지",
+            "VAR Insight 탭에서 IRF/FEVD 시각화(확장)",
+            "공유(Cloud 링크/README/데이터 공유 정책)",
+        ],
+    }
+
+
+def render_pipeline_visual(pipeline: Dict[str, List[str]]) -> None:
+    """
+    Graphviz가 있으면 흐름도를 그리고,
+    없으면 텍스트 기반으로 안전하게 표시.
+    """
+    st.subheader("🧭 분석 파이프라인 전체 보기")
+    st.caption("분석 결과(Risk Signal/VAR Insight)가 ‘어떤 단계’를 거쳐 만들어지는지 설명하기 위한 지도입니다.")
+
+    # 1) Graphviz 시도
+    try:
+        import graphviz  # type: ignore
+
+        dot = graphviz.Digraph()
+        dot.attr(rankdir="LR")
+
+        # 카테고리 노드
+        dot.attr("node", shape="box", style="rounded,filled", fillcolor="lightgrey")
+        categories = list(pipeline.keys())
+        for c in categories:
+            dot.node(c, c)
+
+        # 각 카테고리 내부 step 노드 연결
+        dot.attr("node", shape="box", style="rounded,filled", fillcolor="white")
+        for c, steps in pipeline.items():
+            prev = c
+            for i, s in enumerate(steps, start=1):
+                sid = f"{c}_{i}"
+                dot.node(sid, f"{i}. {s}")
+                dot.edge(prev, sid)
+                prev = sid
+
+        st.graphviz_chart(dot, use_container_width=True)
+
+    except Exception:
+        st.info("ℹ️ Graphviz가 설치되어 있지 않아 텍스트 형태로 파이프라인을 표시합니다. (요건: requirements.txt에 graphviz 추가)")
+        for c, steps in pipeline.items():
+            st.markdown(f"### {c}")
+            for i, s in enumerate(steps, start=1):
+                st.markdown(f"- {i}. {s}")
+
+    st.divider()
+    st.subheader("카테고리별 단계(체크리스트)")
+    st.caption("팀 내부에서 ‘어디까지 구현/검증됐는지’ 표시용으로 사용할 수 있습니다.")
+    for c, steps in pipeline.items():
+        with st.expander(f"📌 {c}", expanded=(c == "대시보드 출력")):
+            for s in steps:
+                st.checkbox(s, value=False, key=f"pipeline_{c}_{s}")
+
+
 def main() -> None:
     st.set_page_config(page_title="시장 위험도 대시보드", page_icon="📊", layout="wide")
     st.title("📊 시장 위험도 대시보드")
@@ -121,7 +203,8 @@ def main() -> None:
         st.error("표시할 데이터가 없습니다.")
         return
 
-    tab1, tab2 = st.tabs(["🚦 Risk Signal", "🧩 VAR Insight(준비중)"])
+    # 탭 확장: 분석 파이프라인 추가
+    tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧩 VAR Insight(준비중)", "🧭 분석 파이프라인"])
 
     with tab1:
         # ---- Sidebar: 날짜 선택(YYYY-MM-DD로 깔끔하게) ----
@@ -216,11 +299,10 @@ def main() -> None:
                     if k == "m2" and (prev_val == 0 or value == 0):
                         delta_txt = "전일: N/A"
                     else:
+                        delta_val = value - prev_val
                         if k in ["funding", "taker", "m2"]:
-                            delta_val = value - prev_val
                             delta_txt = f"전일 대비 {delta_val:+.4f}"
                         else:
-                            delta_val = value - prev_val
                             delta_txt = f"전일 대비 {delta_val:+,.0f}"
                 except Exception:
                     delta_txt = "전일: N/A"
@@ -263,6 +345,19 @@ def main() -> None:
             "원하면, 지금 df_var_1209 기준으로 IRF 1개 그래프부터 바로 붙여줄게요."
         )
 
+    with tab3:
+        pipeline = get_analysis_pipeline()
+        render_pipeline_visual(pipeline)
+        st.divider()
+        st.markdown(
+            """
+**이 탭의 목적**  
+- 팀원/멘토가 “Risk Signal / VAR Insight가 어떤 분석 과정을 통해 나오는지”를 즉시 이해하도록 돕습니다.  
+- 1210_VAR_시범.py의 연구/실험 코드는 유지하되, 대시보드에서는 “과정 지도 + 결과 요약” 형태로 설명합니다.
+"""
+        )
+
 
 if __name__ == "__main__":
     main()
+
