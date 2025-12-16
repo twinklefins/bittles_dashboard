@@ -87,32 +87,59 @@ def overall_risk_text(total_score: int, count: int) -> str:
 # CII (optional)
 # ======================
 def build_cii(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    draft 데이터에 아래 컬럼들이 있으면 CII 생성.
-    없으면 CII는 NaN.
-    """
     out = df.copy()
 
-    need = [
-        "gt_bitcoin", "gt_btc_z14",
-        "rd_avg_sent", "rd_pos_ratio", "rd_neg_ratio",
-        "rd_rolling_mean_neg", "rd_rolling_std_neg", "rd_count"
-    ]
-    if any(c not in out.columns for c in need):
+    # ✅ 실제 데이터 컬럼명 ↔ 코드에서 쓰고 싶은 논리명 매핑
+    alias = {
+        "gt_bitcoin": ["gt_bitcoin", "bitcoin", "gtrend_bitcoin"],
+        "gt_btc_z14": ["gt_btc_z14", "gtrend_btc_z14", "gt_btc_z14"],
+        "rd_avg_sent": ["rd_avg_sent", "avg_sent", "reddit_avg_sent"],
+        "rd_pos_ratio": ["rd_pos_ratio", "pos_ratio"],
+        "rd_neg_ratio": ["rd_neg_ratio", "neg_ratio"],
+        "rd_rolling_mean_neg": ["rd_rolling_mean_neg", "rolling_mean_neg"],
+        "rd_rolling_std_neg": ["rd_rolling_std_neg", "rolling_std_neg"],
+        "rd_count": ["rd_count", "count", "rd_cnt"],
+    }
+
+    def pick(name: str) -> Optional[str]:
+        for c in alias[name]:
+            if c in out.columns:
+                return c
+        return None
+
+    # 실제로 존재하는 컬럼명으로 resolve
+    col = {k: pick(k) for k in alias.keys()}
+
+    missing = [k for k, v in col.items() if v is None]
+    if missing:
         out["CII"] = np.nan
+        # 디버깅용: 어떤 컬럼이 없어서 실패했는지 확인
+        out.attrs["cii_missing"] = missing
+        out.attrs["cii_colmap"] = col
         return out
 
-    out["rd_pos_minus_neg"] = out["rd_pos_ratio"] - out["rd_neg_ratio"]
+    # ---- 계산 ----
+    out["rd_pos_minus_neg"] = out[col["rd_pos_ratio"]] - out[col["rd_neg_ratio"]]
 
-    cii_attention = (zscore(out["gt_bitcoin"]) + zscore(out["gt_btc_z14"])) / 2
-    cii_sentiment = (
-        zscore(out["rd_avg_sent"]) +
-        zscore(out["rd_pos_minus_neg"]) -
-        zscore(out["rd_rolling_mean_neg"])
+    out["cii_attention"] = (z(out[col["gt_bitcoin"]]) + z(out[col["gt_btc_z14"]])) / 2
+    out["cii_sentiment"] = (
+        z(out[col["rd_avg_sent"]]) +
+        z(out["rd_pos_minus_neg"]) -
+        z(out[col["rd_rolling_mean_neg"]])
     ) / 3
-    cii_volatility = (zscore(out["rd_rolling_std_neg"]) + zscore(out["rd_count"])) / 2
+    out["cii_volatility"] = (
+        z(out[col["rd_rolling_std_neg"]]) +
+        z(out[col["rd_count"]])
+    ) / 2
 
-    out["CII"] = 0.4 * cii_attention + 0.4 * cii_sentiment + 0.2 * cii_volatility
+    out["CII"] = (
+        0.4 * out["cii_attention"] +
+        0.4 * out["cii_sentiment"] +
+        0.2 * out["cii_volatility"]
+    )
+
+    out.attrs["cii_missing"] = []
+    out.attrs["cii_colmap"] = col
     return out
 
 
