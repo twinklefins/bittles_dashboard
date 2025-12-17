@@ -240,12 +240,26 @@ def draw_gauge(score: float, level: str):
     # 바늘
     ang = math.radians(180 * (1 - score / 100))
     nx, ny = 0.78 * math.cos(ang), 0.78 * math.sin(ang)
-    ax.plot([0, nx], [0, ny], linewidth=4, color="#222222")
-    ax.add_patch(plt.matplotlib.patches.Circle((0, 0), 0.04, color="#222222"))
 
-    # 중앙 텍스트
-    ax.text(0, 0.20, f"{score:.0f}", ha="center", va="center", fontsize=36, fontweight="bold", color="#111111")
-    ax.text(0, 0.06, level, ha="center", va="center", fontsize=14, color="#333333")
+    ax.plot([0, nx], [0, ny], linewidth=4, color="#222222", zorder=2)  # ✅ zorder 추가
+    ax.add_patch(plt.matplotlib.patches.Circle((0, 0), 0.04, color="#222222", zorder=3))  # ✅ zorder 추가
+
+    # 중앙 텍스트(✅ 흰 배경 + zorder)
+    ax.text(
+        0, 0.22, f"{score:.0f}",
+        ha="center", va="center",
+        fontsize=36, fontweight="bold", color="#111111",
+        zorder=10,
+        bbox=dict(facecolor="white", edgecolor="none", pad=6, alpha=0.9)
+    )
+
+    ax.text(
+        0, 0.03, level,
+        ha="center", va="center",
+        fontsize=14, color="#333333",
+        zorder=11,
+        bbox=dict(facecolor="white", edgecolor="none", pad=4, alpha=0.9)
+    )
 
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(-0.10, 1.05)
