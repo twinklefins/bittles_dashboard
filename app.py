@@ -40,7 +40,7 @@ def load_data(path: Path) -> pd.DataFrame:
         if c == "time":
             continue
         if df[c].dtype == "object":
-            df[c] = pd.to_numeric(df[c], errors="ignore")
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
     return df
 
@@ -204,16 +204,14 @@ def compute_market_mood_index(df: pd.DataFrame, row: pd.Series, signals: Dict[st
 
 def draw_gauge(score: float, level: str):
     """
-    Upbit 느낌의 반원 게이지(0~100) - matplotlib
+    반원 게이지(0~100) - matplotlib
     """
-    # 구간 색(차트 스타일은 지정하지 말라는 규칙이 “python_user_visible”용이라 여기서는 OK지만,
-    # 그래도 최소한으로만 지정할게)
     bands = [
-        (0, 20, "#2E86FF"),   # Calm (blue)
-        (20, 40, "#2ECC71"),  # Stable (green)
-        (40, 60, "#F1C40F"),  # Warm (yellow)
-        (60, 80, "#E67E22"),  # Hot (orange)
-        (80, 100, "#E74C3C"), # Too Hot (red)
+        (0, 20, "#2E86FF"),   # Calm
+        (20, 40, "#2ECC71"),  # Stable
+        (40, 60, "#F1C40F"),  # Warm
+        (60, 80, "#E67E22"),  # Hot
+        (80, 100, "#E74C3C"), # Too Hot
     ]
 
     fig, ax = plt.subplots(figsize=(9, 4.6))
@@ -224,7 +222,10 @@ def draw_gauge(score: float, level: str):
     for a, b, color in bands:
         theta1 = 180 * (1 - a / 100)
         theta2 = 180 * (1 - b / 100)
-        wedge = plt.matplotlib.patches.Wedge((0, 0), 1.0, theta2, theta1, width=0.18, color=color, alpha=0.95)
+        wedge = plt.matplotlib.patches.Wedge(
+            (0, 0), 1.0, theta2, theta1,
+            width=0.18, color=color, alpha=0.95
+        )
         ax.add_patch(wedge)
 
     # 눈금
@@ -237,11 +238,15 @@ def draw_gauge(score: float, level: str):
             xt, yt = 0.68 * math.cos(ang), 0.68 * math.sin(ang)
             ax.text(xt, yt, str(t), ha="center", va="center", fontsize=11, color="#777777")
 
+    # ✅ 바늘 각도 & 좌표(이게 누락돼서 꼬였던 부분)
+    ang = math.radians(180 * (1 - score / 100))
+    nx, ny = 0.74 * math.cos(ang), 0.74 * math.sin(ang)  # 바늘 길이(겹침 방지)
+
     # 바늘
     ax.plot([0, nx], [0, ny], linewidth=4, color="#222222", zorder=2)
     ax.add_patch(plt.matplotlib.patches.Circle((0, 0), 0.04, color="#222222", zorder=3))
 
-    # 중앙 텍스트 (바늘보다 위)
+    # 중앙 텍스트(바늘보다 위 + 흰 배경)
     ax.text(
         0, 0.20, f"{score:.0f}",
         ha="center", va="center",
