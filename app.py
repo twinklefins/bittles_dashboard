@@ -1,4 +1,3 @@
-# app.py
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -7,109 +6,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from statsmodels.tsa.api import VAR
 import matplotlib.pyplot as plt
+from statsmodels.tsa.api import VAR
 
 
 # ======================
 # Paths
 # ======================
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-
-# ✅ 우선순위: draft(최신) -> var(구버전) 순으로 자동 선택
-CANDIDATE_FILES = [
-    "df_draft_1209_w.sti.csv",
-    "df_var_1209.csv",
-]
-
-
-def resolve_data_path() -> Path:
-    for fname in CANDIDATE_FILES:
-        p = DATA_DIR / fname
-        if p.exists():
-            return p
-    return DATA_DIR / CANDIDATE_FILES[0]
-
-
-# ======================
-# Utils
-# ======================
-def z(x: pd.Series) -> pd.Series:
-    x = x.replace([np.inf, -np.inf], np.nan)
-    mu = x.mean()
-    sd = x.std()
-    if sd == 0 or pd.isna(sd):
-        return pd.Series(np.nan, index=x.index)
-    return (x - mu) / sd
-
-
-def find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    cols = set(df.columns)
-    for c in candidates:
-        if c in cols:
-            return c
-    return None
-
-
-# ======================
-# CII (Consumer Investment Index)
-# ======================
-def build_cii(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    데이터에 있는 컬럼명을 자동 매핑해서 CII를 계산합니다.
-    - GT(관심): bitcoin / gtrend_btc_z14 등
-    - Sentiment: avg_sent / pos_ratio / neg_ratio / rolling_mean_neg / rolling_std_neg / count 등
-    """
-    out = df.copy()
-
-    alias = {
-        "gt_bitcoin": ["gt_bitcoin", "bitcoin", "gtrend_bitcoin", "gt_bitcoin_raw"],
-        "gt_btc_z14": ["gt_btc_z14", "gtrend_btc_z14", "gt_btc_z14"],
-        "rd_avg_sent": ["rd_avg_sent", "avg_sent", "reddit_avg_sent", "sent_avg"],
-        "rd_pos_ratio": ["rd_pos_ratio", "pos_ratio", "sent_pos_ratio"],
-        "rd_neg_ratio": ["rd_neg_ratio", "neg_ratio", "sent_neg_ratio"],
-        "rd_rolling_mean_neg": ["rd_rolling_mean_neg", "rolling_mean_neg", "neg_rolling_mean"],
-        "rd_rolling_std_neg": ["rd_rolling_std_neg", "rolling_std_neg", "neg_rolling_std"],
-        "rd_count": ["rd_count", "count", "rd_cnt", "doc_count"],
-    }
-
-    def pick(key: str) -> Optional[str]:
-        for c in alias[key]:
-            if c in out.columns:
-                return c
-        return None
-
-    col = {k: pick(k) for k in alias.keys()}
-    missing = [k for k, v in col.items() if v is None]
-
-    out.attrs["cii_colmap"] = col
-    out.attrs["cii_missing"] = missing
-
-    if missing:
-        out["CII"] = np.nan
-        return out
-
-    out["rd_pos_minus_neg"] = out[col["rd_pos_ratio"]] - out[col["rd_neg_ratio"]]
-
-    out["cii_attention"] = (z(out[col["gt_bitcoin"]]) + z(out[col["gt_btc_z14"]])) / 2
-    out["cii_sentiment"] = (
-        z(out[col["rd_avg_sent"]]) +
-        z(out["rd_pos_minus_neg"]) -
-        z(out[col["rd_rolling_mean_neg"]])
-    ) / 3
-    out["cii_volatility"] = (
-        z(out[col["rd_rolling_std_neg"]]) +
-        z(out[col["rd_count"]])
-    ) / 2
-
-    out["CII"] = (
-        0.4 * out["cii_attention"] +
-        0.4 * out["cii_sentiment"] +
-        0.2 * out["cii_volatility"]
-    )
-
-    return out
+DATA_PATH = BASE_DIR / "data" / "df_draft_1209_w.sti.csv"
 
 
 # ======================
@@ -118,37 +23,44 @@ def build_cii(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_data(path: Path) -> pd.DataFrame:
     if not path.exists():
+        st.error(f"데이터 파일을 찾을 수 없습니다: {path}")
         return pd.DataFrame()
 
     df = pd.read_csv(path)
 
     if "time" not in df.columns:
-        raise ValueError("CSV에 'time' 컬럼이 없습니다.")
+        st.error("CSV에 'time' 컬럼이 없습니다.")
+        return pd.DataFrame()
 
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time"]).set_index("time").sort_index()
 
-    # 숫자형 캐스팅(문자열 숫자 대비)
-    for c in df.columns:
-        if df[c].dtype == "object":
-            df[c] = pd.to_numeric(df[c], errors="ignore")
-
-    df = build_cii(df)
+    # 숫자형 컬럼 내 inf 제거
+    df = df.replace([np.inf, -np.inf], np.nan)
     return df
 
 
 # ======================
-# Risk helpers
+# Utils
 # ======================
+def find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    cols = set(df.columns)
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
 def percentile_signal(series: pd.Series, value: float, higher_is_risky: bool = True) -> Tuple[str, int]:
+    """Return emoji + score (green=0, yellow=1, red=2, neutral=1)."""
     if series.empty or pd.isna(value):
         return "⚪️", 1
 
-    series = series.replace([np.inf, -np.inf], np.nan).dropna()
-    if series.empty:
+    s = series.dropna()
+    if s.empty:
         return "⚪️", 1
 
-    lower, upper = series.quantile([0.33, 0.66])
+    lower, upper = s.quantile([0.33, 0.66])
 
     if higher_is_risky:
         if value >= upper:
@@ -164,23 +76,66 @@ def percentile_signal(series: pd.Series, value: float, higher_is_risky: bool = T
     return "🟡", 1
 
 
-def overall_risk_text(total_score: int, count: int) -> str:
-    avg = total_score / max(count, 1)
-    if avg < 0.5:
-        return "🟢 과열 신호는 약합니다. 급변 구간에서도 감정적 매매보다 구조(청산/펀딩/레버리지)를 먼저 확인하세요."
-    if avg < 1.2:
-        return "🟡 단기 변동성이 커질 수 있는 구간입니다. ‘청산/펀딩/쏠림’ 요인을 먼저 점검하세요."
-    if avg < 1.8:
-        return "🟠 레버리지·쏠림 주의 구간입니다. 포지션 크기/리스크 관리가 필요합니다."
-    return "🔴 단기 충격 가능성이 큽니다. 무리한 레버리지는 피하고 변동성 확대를 전제로 대응하세요."
+def overall_risk_text(avg_score: float) -> str:
+    if avg_score < 0.5:
+        return "🟢 현재는 구조적 과열 신호가 약합니다. 급락 시에도 패닉셀보다 ‘원인(청산/펀딩/유동성)’ 확인이 우선입니다."
+    if avg_score < 1.2:
+        return "🟡 단기 변동성이 커질 수 있는 구간입니다. 패닉셀보다는 ‘청산/펀딩/쏠림’ 요인이 있는지 먼저 점검하세요."
+    if avg_score < 1.8:
+        return "🟠 레버리지·쏠림 신호가 관측됩니다. 포지션 크기/리스크 관리를 권장합니다."
+    return "🔴 단기 충격(청산/레버리지) 가능성이 높습니다. 무리한 레버리지는 피하고 변동성 확대를 전제로 대응하세요."
+
+
+def market_mood_label(avg_score: float) -> Tuple[str, str]:
+    """Market Mood (쉬운 말 + 재밌는 톤)"""
+    if avg_score < 0.5:
+        return "🔵 Calm", "시장 과열/쏠림 신호가 낮은 편입니다. 단기 변동은 ‘구조’보다 ‘이벤트’ 요인일 가능성이 큽니다."
+    if avg_score < 1.0:
+        return "🟢 Stable", "심리와 레버리지 지표가 비교적 균형입니다. 과열 신호는 제한적입니다."
+    if avg_score < 1.4:
+        return "🟡 Warm", "시장 관심이 올라오는 구간입니다. 변동성이 커질 수 있어요(쏠림/청산 체크 권장)."
+    if avg_score < 1.8:
+        return "🟠 Hot", "레버리지·쏠림 신호가 관측됩니다. 단기 조정/변동성 확대 가능성에 유의하세요."
+    return "🔴 Too Hot", "과열 경고 구간입니다. 청산/급변동 리스크가 커질 수 있어 ‘감정 매매’는 특히 위험합니다."
+
+
+def build_cause_summary(signals: Dict[str, str]) -> str:
+    """Short, human-readable summary."""
+    red = [k for k, s in signals.items() if s == "🔴"]
+    yellow = [k for k, s in signals.items() if s == "🟡"]
+    neutral = [k for k, s in signals.items() if s == "⚪️"]
+
+    desc = {
+        "oi": "레버리지(OI)",
+        "funding": "펀딩(쏠림/과열)",
+        "liq": "청산(강제 체결)",
+        "taker": "테이커 쏠림",
+        "m2": "유동성(M2)",
+    }
+
+    lines = []
+    if red:
+        lines.append("🔴 **강한 단기 리스크 신호**: " + ", ".join(desc[x] for x in red))
+        lines.append("→ 급변 구간에서는 ‘원인 확인(청산/펀딩/레버리지)’이 먼저이고, 즉흥 매매는 손실 확률을 키웁니다.")
+    elif yellow:
+        lines.append("🟡 **변동성 확대 신호**: " + ", ".join(desc[x] for x in yellow))
+        lines.append("→ 당일 급락/급등이 ‘쏠림’으로 과장될 수 있어 추세인지 구조인지 확인하세요.")
+    else:
+        lines.append("🟢 **과열 신호가 뚜렷하지 않습니다.** 단기 노이즈 가능성이 큽니다.")
+
+    if neutral:
+        lines.append("⚪️ 데이터 부족/결측 가능: " + ", ".join(desc[x] for x in neutral))
+
+    return "\n\n".join(lines)
 
 
 # ======================
 # VAR helpers
 # ======================
 def zscore_df(df: pd.DataFrame) -> pd.DataFrame:
-    std = df.std().replace(0, np.nan)
-    return (df - df.mean()) / std
+    mu = df.mean()
+    sd = df.std().replace(0, np.nan)
+    return (df - mu) / sd
 
 
 def run_var_bundle(
@@ -194,26 +149,27 @@ def run_var_bundle(
     if len(selected_cols) < 2:
         raise ValueError("VAR 변수는 2개 이상 선택해야 합니다.")
     if target not in selected_cols:
-        raise ValueError("타겟(반응) 변수는 선택된 VAR 변수 안에 있어야 합니다.")
+        raise ValueError("타겟 변수는 선택된 VAR 변수 안에 있어야 합니다.")
 
     data = df[selected_cols].copy()
     data = data.replace([np.inf, -np.inf], np.nan).dropna()
 
+    if data.shape[0] < max(80, lag * 12):
+        raise ValueError(f"데이터가 부족합니다. (현재 {data.shape[0]} rows) lag={lag}면 80행 이상 권장")
+
     if standardize:
         data = zscore_df(data).dropna()
 
-    if data.shape[0] < max(60, lag * 15):
-        raise ValueError(f"데이터가 너무 적습니다. (현재 {data.shape[0]} rows) lag={lag} 기준 최소 60~권장")
+    model = VAR(data)
+    results = model.fit(lag)
 
-    res = VAR(data).fit(lag)
-
-    # --- Granger table
+    # Granger: x -> target
     rows = []
     for x in selected_cols:
         if x == target:
             continue
         try:
-            test = res.test_causality(caused=target, causing=[x], kind="f")
+            test = results.test_causality(caused=target, causing=[x], kind="f")
             rows.append(
                 {
                     "causing(x)": x,
@@ -223,283 +179,302 @@ def run_var_bundle(
                 }
             )
         except Exception as e:
-            rows.append(
-                {
-                    "causing(x)": x,
-                    "caused(target)": target,
-                    "stat(F)": np.nan,
-                    "pvalue": np.nan,
-                    "error": str(e),
-                }
-            )
-    granger = pd.DataFrame(rows).sort_values("pvalue", na_position="last").reset_index(drop=True)
+            rows.append({"causing(x)": x, "caused(target)": target, "stat(F)": np.nan, "pvalue": np.nan, "error": str(e)})
 
-    # --- IRF
-    irf = res.irf(horizon)
+    granger_df = pd.DataFrame(rows).sort_values("pvalue", na_position="last").reset_index(drop=True)
 
-    # --- FEVD (robust shape)
-    fevd = res.fevd(horizon)
+    # IRF / FEVD
+    irf = results.irf(horizon)
+    fevd = results.fevd(horizon)
+
+    varnames = list(results.names)
+    t_idx = varnames.index(target)
+
     decomp = np.array(fevd.decomp)  # (steps, response, impulse)
-
-    names = list(res.names)
-    t_idx = names.index(target)
-
-    # step0 포함 여부 처리
-    # decomp[t, response, impulse]
-    if decomp.shape[0] == horizon + 1:
-        decomp_use = decomp[1:, t_idx, :]  # (horizon, impulses)
-        idx = list(range(1, horizon + 1))
-    elif decomp.shape[0] == horizon:
-        decomp_use = decomp[:, t_idx, :]
-        idx = list(range(1, horizon + 1))
+    # step 0 제거 (표 보기 좋게)
+    if decomp.shape[0] >= 2:
+        decomp = decomp[1:, :, :]
+        step_index = list(range(1, decomp.shape[0] + 1))
     else:
-        # 예상치 못한 경우라도 최대한 안전하게
-        decomp_use = decomp[min(1, decomp.shape[0] - 1):, t_idx, :]
-        idx = list(range(1, decomp_use.shape[0] + 1))
+        step_index = list(range(decomp.shape[0]))
 
-    fevd_tbl = pd.DataFrame(decomp_use * 100.0, columns=names, index=idx).round(2)
-    fevd_tbl.index.name = "horizon(step)"
+    fevd_target = decomp[:, t_idx, :]  # (steps, impulse)
+    fevd_table = pd.DataFrame(fevd_target * 100.0, columns=varnames, index=step_index).round(2)
+    fevd_table.index.name = "horizon(step)"
 
     return {
-        "granger": granger,
+        "granger_table": granger_df,
         "irf": irf,
-        "fevd_tbl": fevd_tbl,
-        "rows_used": int(data.shape[0]),
-        "names": names,
+        "fevd_table_target": fevd_table,
+        "var_results": results,
+        "var_rows": data.shape[0],
+        "var_names": varnames,
     }
 
 
 # ======================
-# UI
+# App
 # ======================
-def main():
-    st.set_page_config(page_title="시장 위험도 대시보드", page_icon="📊", layout="wide")
+def main() -> None:
+    st.set_page_config(page_title="Bittles Dashboard", page_icon="📊", layout="wide")
 
+    # UI polish: metric 라벨 줄바꿈/잘림 방지
     st.markdown(
         """
         <style>
-        .block-container { padding-top: 1.1rem; padding-bottom: 2.2rem; }
-        h1 { margin-bottom: 0.15rem; }
-        [data-testid="stMetricLabel"] { white-space: normal; font-size: 0.92rem; }
+        .block-container { padding-top: 1.0rem; padding-bottom: 2rem; }
+        [data-testid="stMetricLabel"] { white-space: normal; font-size: 0.9rem; }
         [data-testid="stMetricValue"] { font-size: 1.55rem; }
-        section[data-testid="stSidebar"] .block-container { padding-top: 1.1rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    st.title("📊 시장 위험도 대시보드")
-    st.caption("Risk Signal(신호등) + VAR Insight(Granger/IRF/FEVD) + Pipeline")
+    st.title("📊 Bittles Dashboard")
+    st.caption("Risk Signal → Market Mood → VAR(Granger/IRF/FEVD)로 ‘시장 상태’를 해석하는 대시보드")
 
-    data_path = resolve_data_path()
-    df = load_data(data_path)
-
+    df = load_data(DATA_PATH)
     if df.empty:
-        st.error(f"데이터 파일을 찾을 수 없습니다: `{data_path}`\n\n`data/` 폴더에 CSV가 있는지 확인해 주세요.")
-        return
+        st.stop()
 
-    # ---- Tabs
-    tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧩 VAR Insight", "🧭 Pipeline"])
-
-    # ---- Sidebar common controls
-    st.sidebar.header("설정")
-
-    # ✅ 날짜: 최신이 위로(내림차순)
-    unique_dates = sorted(pd.unique(df.index.date), reverse=True)
-    sel_date = st.sidebar.selectbox(
-        "기준 날짜",
-        options=unique_dates,
-        index=0,
-        format_func=lambda d: d.strftime("%Y-%m-%d"),
-        key="base_date",
-    )
-
-    # 해당 날짜 마지막 row
-    day_df = df[df.index.date == sel_date]
-    if day_df.empty:
-        day_df = df.iloc[[-1]]
-    latest_row = day_df.iloc[-1]
-
-    # 전일 row (내림차순 리스트 기준: idx+1이 전일)
-    i = unique_dates.index(sel_date)
-    prev_row = None
-    if i + 1 < len(unique_dates):
-        prev_date = unique_dates[i + 1]
-        prev_day_df = df[df.index.date == prev_date]
-        if not prev_day_df.empty:
-            prev_row = prev_day_df.iloc[-1]
+    tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧠 Market Mood", "🧩 VAR Insight"])
 
     # ======================
-    # TAB 1: Risk Signal
+    # Tab 1: Risk Signal
     # ======================
     with tab1:
-        st.subheader(f"기준 데이터 날짜: {sel_date:%Y-%m-%d}")
+        st.sidebar.header("설정")
 
-        with st.expander("✅ 데이터 로드 정보(디버깅)"):
-            st.write("사용 파일:", str(data_path))
-            st.write("행/열:", df.shape)
-            st.write("컬럼 수:", len(df.columns))
+        # ✅ 날짜: 최근 날짜가 맨 위 (내림차순)
+        unique_dates = sorted(pd.unique(df.index.date), reverse=True)
 
-        # 컬럼 자동 매핑
-        colmap = {
-            "oi": find_column(df, ["oi_close", "oi_close_diff", "open_interest", "oi"]),
+        selected_date = st.sidebar.selectbox(
+            "기준 날짜(최근이 위)",
+            options=unique_dates,
+            index=0,
+            format_func=lambda d: d.strftime("%Y-%m-%d"),
+            key="risk_date",
+        )
+
+        selected_df = df[df.index.date == selected_date]
+        if selected_df.empty:
+            st.error("선택한 날짜 데이터가 없습니다.")
+            st.stop()
+
+        today = selected_df.iloc[-1]
+
+        # 전일 (unique_dates는 내림차순이므로 +1이 전일)
+        idx = unique_dates.index(selected_date)
+        prev_date = unique_dates[idx + 1] if idx < len(unique_dates) - 1 else None
+        prev_row = df[df.index.date == prev_date].iloc[-1] if prev_date else None
+
+        st.subheader(f"기준 시점: {today.name:%Y-%m-%d %H:%M:%S}")
+
+        # 컬럼 매핑(자동)
+        colmap: Dict[str, Optional[str]] = {
+            "oi": find_column(df, ["oi_close_diff", "oi_diff", "open_interest_diff", "open_interest", "oi"]),
             "funding": find_column(df, ["funding_close", "funding", "funding_rate"]),
-            "liq": find_column(df, ["liq_total_usd", "liq_total_usd_diff", "liquidation_usd", "liq_usd"]),
+            "liq": find_column(df, ["liq_total_usd_diff", "liquidation_usd", "liq_usd", "liq_total_usd"]),
             "taker": find_column(df, ["taker_buy_ratio", "taker_ratio"]),
-            "m2": find_column(df, ["global_m2_yoy_diff", "m2_yoy_diff", "global_m2_yoy"]),
+            "m2": find_column(df, ["global_m2_yoy_diff", "m2_yoy_diff", "global_m2_yoy", "m2_yoy"]),
         }
 
-        # 표시용 지표 정의
-        indicators = [
-            ("oi", "OI", True),
-            ("funding", "펀딩비", True),
-            ("liq", "청산(USD)", True),
-            ("taker", "테이커 비중(쏠림)", True),
-            ("m2", "M2", False),
-        ]
+        indicators = {
+            "oi": {"title": "OI 변화", "higher_is_risky": True},
+            "funding": {"title": "펀딩비", "higher_is_risky": True},
+            "liq": {"title": "청산(USD)", "higher_is_risky": True},
+            "taker": {"title": "테이커 비중", "higher_is_risky": True},
+            "m2": {"title": "M2(유동성)", "higher_is_risky": False},
+        }
 
         cols = st.columns(len(indicators), gap="large")
-        total_score, used = 0, 0
 
-        for ui_col, (k, label, higher_is_risky) in zip(cols, indicators):
+        total_score, used = 0, 0
+        signal_map: Dict[str, str] = {}
+
+        for ui_col, (k, meta) in zip(cols, indicators.items()):
             real_col = colmap.get(k)
-            if not real_col or real_col not in df.columns:
-                ui_col.metric(label, "N/A")
-                ui_col.caption("⚪️ 컬럼 없음")
+            if not real_col:
+                ui_col.metric(meta["title"], "N/A")
+                ui_col.caption("⚪️ (컬럼 없음)")
+                signal_map[k] = "⚪️"
                 continue
 
-            raw_val = latest_row.get(real_col, np.nan)
+            value = today.get(real_col, np.nan)
+            if pd.isna(value):
+                ui_col.metric(meta["title"], "N/A")
+                ui_col.caption(f"⚪️ `{real_col}` 결측")
+                signal_map[k] = "⚪️"
+                continue
 
-            # 값 표시
-            display_value = "N/A"
+            value = float(value)
+
+            # taker는 0.5에서 멀수록 쏠림(리스크)로 보기 좋음
             extra_line = ""
-
-            # m2: 0이면 결측 취급
-            if k == "m2":
-                if pd.isna(raw_val) or float(raw_val) == 0.0:
-                    sig, sc = "⚪️", 1
-                    display_value = "0"
-                    extra_line = "0값 → 결측 가능"
-                else:
-                    sig, sc = percentile_signal(df[real_col], float(raw_val), higher_is_risky=higher_is_risky)
-                    display_value = f"{float(raw_val):,.4g}"
-            elif k == "taker":
-                # 쏠림: |x-0.5|
-                if pd.isna(raw_val):
-                    sig, sc = "⚪️", 1
-                    display_value = "N/A"
-                else:
-                    v = abs(float(raw_val) - 0.5)
-                    series = (df[real_col] - 0.5).abs()
-                    sig, sc = percentile_signal(series, v, higher_is_risky=True)
-                    display_value = f"{float(raw_val):.3f}"
-                    extra_line = f"쏠림 |x-0.5| = {v:.3f}"
+            if k == "taker":
+                series = (df[real_col] - 0.5).abs()
+                v = abs(value - 0.5)
+                signal, score = percentile_signal(series, v, higher_is_risky=True)
+                display_value = f"{value:.3f}"
+                extra_line = f"쏠림 |{v:.3f}| (0.5에서 멀수록 쏠림)"
             else:
-                if pd.isna(raw_val):
-                    sig, sc = "⚪️", 1
-                    display_value = "N/A"
-                else:
-                    sig, sc = percentile_signal(df[real_col], float(raw_val), higher_is_risky=higher_is_risky)
-                    display_value = f"{float(raw_val):,.4g}"
+                series = df[real_col]
+                signal, score = percentile_signal(series, value, higher_is_risky=meta["higher_is_risky"])
+                display_value = f"{value:,.4g}"
 
-            # 전일 대비 delta
+            # 전일 대비
             delta_txt = None
             if prev_row is not None and real_col in prev_row.index:
-                try:
-                    pv = prev_row.get(real_col, np.nan)
-                    if pd.isna(pv) or pd.isna(raw_val):
-                        delta_txt = None
+                pv = prev_row.get(real_col, np.nan)
+                if not pd.isna(pv):
+                    pv = float(pv)
+                    delta = value - pv
+                    if k in ["funding", "taker", "m2"]:
+                        delta_txt = f"{delta:+.4f}"
                     else:
-                        dv = float(raw_val) - float(pv)
-                        # 소수형은 4자리, 큰 값은 천단위 구분
-                        if k in ["funding", "taker", "m2"]:
-                            delta_txt = f"{dv:+.4f}"
-                        else:
-                            delta_txt = f"{dv:+,.0f}"
-                except Exception:
-                    delta_txt = None
+                        delta_txt = f"{delta:+,.0f}"
 
-            ui_col.metric(label, display_value, delta=delta_txt)
-            ui_col.caption(f"신호: {sig} · 컬럼: `{real_col}`")
+            ui_col.metric(meta["title"], display_value, delta=delta_txt)
+            ui_col.caption(f"{signal}  ·  `{real_col}`")
             if extra_line:
                 ui_col.caption(extra_line)
 
-            total_score += sc
+            signal_map[k] = signal
+            total_score += score
             used += 1
 
         st.divider()
-        st.subheader("신호등 요약")
-        st.write("🟢 낮음 | 🟡 중간 | 🔴 높음 | ⚪️ 데이터 부족/결측/컬럼 없음")
-        st.success(overall_risk_text(total_score, used))
 
-        # ---- CII
-        st.subheader("📈 소비자 투자 인덱스 (CII)")
-        if "CII" not in df.columns or df["CII"].dropna().empty:
-            st.warning("CII 계산 불가 (필요 컬럼 부족)")
-            with st.expander("CII 디버깅 정보"):
-                st.write("missing:", df.attrs.get("cii_missing"))
-                st.write("colmap:", df.attrs.get("cii_colmap"))
-        else:
-            # 기준 날짜의 CII 마지막 값(가능하면)
-            cii_val = day_df["CII"].dropna().iloc[-1] if ("CII" in day_df.columns and not day_df["CII"].dropna().empty) else df["CII"].dropna().iloc[-1]
-            st.metric("CII (latest)", f"{float(cii_val):.2f}")
-            st.line_chart(df["CII"].tail(200))
+        avg_score = total_score / max(used, 1)
+        st.subheader("요약")
+        st.success(overall_risk_text(avg_score))
+        st.info(build_cause_summary(signal_map))
 
-        # ---- Raw preview (가로 스크롤 가능)
-        with st.expander("원본 데이터 미리보기 (가로 스크롤 가능)"):
-            st.dataframe(df.tail(50), use_container_width=True, height=520)
+        with st.expander("데이터 미리보기(컬럼 선택)"):
+            all_cols = list(df.columns)
+            default_cols = [c for c in ["ret_log_1d", colmap.get("oi"), colmap.get("funding"), colmap.get("liq"), colmap.get("taker"), colmap.get("m2")] if c]
+            picked = st.multiselect("표시할 컬럼", options=all_cols, default=default_cols)
+            if picked:
+                st.dataframe(df[picked].tail(200), use_container_width=True)
+            else:
+                st.dataframe(df.tail(50), use_container_width=True)
 
     # ======================
-    # TAB 2: VAR Insight
+    # Tab 2: Market Mood
     # ======================
     with tab2:
+        st.subheader("🧠 Market Mood")
+        st.caption("Risk Signal(지표 신호등) 점수를 ‘사람이 이해하기 쉬운 언어’로 번역한 상태 지표입니다.")
+
+        # Risk 탭에서 계산한 avg_score가 없을 수 있으니, 여기서도 안전 계산
+        # (같은 selected_date를 써서 일관되게)
+        unique_dates = sorted(pd.unique(df.index.date), reverse=True)
+        selected_date = st.sidebar.selectbox(
+            "Market Mood 기준 날짜(최근이 위)",
+            options=unique_dates,
+            index=0,
+            format_func=lambda d: d.strftime("%Y-%m-%d"),
+            key="mood_date",
+        )
+        selected_df = df[df.index.date == selected_date]
+        today = selected_df.iloc[-1] if not selected_df.empty else df.iloc[-1]
+
+        # Risk score 재계산(간단히 동일 로직)
+        colmap2 = {
+            "oi": find_column(df, ["oi_close_diff", "oi_diff", "open_interest_diff", "open_interest", "oi"]),
+            "funding": find_column(df, ["funding_close", "funding", "funding_rate"]),
+            "liq": find_column(df, ["liq_total_usd_diff", "liquidation_usd", "liq_usd", "liq_total_usd"]),
+            "taker": find_column(df, ["taker_buy_ratio", "taker_ratio"]),
+            "m2": find_column(df, ["global_m2_yoy_diff", "m2_yoy_diff", "global_m2_yoy", "m2_yoy"]),
+        }
+        indicators2 = {
+            "oi": {"higher_is_risky": True},
+            "funding": {"higher_is_risky": True},
+            "liq": {"higher_is_risky": True},
+            "taker": {"higher_is_risky": True},
+            "m2": {"higher_is_risky": False},
+        }
+
+        total, cnt = 0, 0
+        for k, meta in indicators2.items():
+            c = colmap2.get(k)
+            if not c or c not in df.columns:
+                continue
+            v = today.get(c, np.nan)
+            if pd.isna(v):
+                continue
+            v = float(v)
+            if k == "taker":
+                s = (df[c] - 0.5).abs()
+                vv = abs(v - 0.5)
+                _, sc = percentile_signal(s, vv, higher_is_risky=True)
+            else:
+                _, sc = percentile_signal(df[c], v, higher_is_risky=meta["higher_is_risky"])
+            total += sc
+            cnt += 1
+
+        avg = total / max(cnt, 1)
+        mood, mood_desc = market_mood_label(avg)
+
+        st.markdown(
+            f"""
+            ### {mood}
+
+            {mood_desc}
+
+            **(참고)** Market Mood는 ‘가격 예측’이 아니라 **현재 시장의 구조/심리 상태를 요약**합니다.
+            """
+        )
+
+        st.divider()
+        st.write("**구간 안내**")
+        st.write("- 🔵 Calm  → 🟢 Stable → 🟡 Warm → 🟠 Hot → 🔴 Too Hot")
+
+    # ======================
+    # Tab 3: VAR Insight
+    # ======================
+    with tab3:
         st.subheader("🧩 VAR Insight")
         st.caption("Granger(표) / IRF(그래프) / FEVD(표)")
 
         st.sidebar.header("VAR 설정")
 
-        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        all_numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        default_candidates = [c for c in ["ret_log_1d", "oi_close_diff", "funding_close", "liq_total_usd_diff", "taker_buy_ratio", "global_m2_yoy_diff"] if c in df.columns]
+        default_sel = default_candidates[:4] if len(default_candidates) >= 2 else all_numeric_cols[:3]
 
-        # 디폴트 후보
-        default_candidates = [c for c in [
-            "ret_log_1d",
-            "funding_close",
-            "taker_buy_ratio",
-            "oi_close",
-            "oi_close_diff",
-            "liq_total_usd",
-            "liq_total_usd_diff",
-            "global_m2_yoy_diff",
-        ] if c in numeric_cols]
-
-        sel_cols = st.sidebar.multiselect(
-            "VAR 변수(2개 이상)",
-            options=numeric_cols,
-            default=(default_candidates[:4] if len(default_candidates) >= 2 else numeric_cols[:3]),
+        selected_cols = st.sidebar.multiselect(
+            "VAR 변수 선택(2개 이상)",
+            options=all_numeric_cols,
+            default=default_sel,
+            key="var_cols",
         )
 
-        target = st.sidebar.selectbox("Target(반응)", options=sel_cols, index=0) if sel_cols else None
+        if selected_cols:
+            target = st.sidebar.selectbox("타겟(반응) 변수", options=selected_cols, index=0, key="var_target")
+            impulse_options = [c for c in selected_cols if c != target]
+            impulse_var = st.sidebar.selectbox(
+                "IRF Impulse(충격) 변수",
+                options=impulse_options if impulse_options else selected_cols,
+                index=0,
+                key="var_impulse",
+            )
+        else:
+            target, impulse_var = None, None
 
-        impulse_options = [c for c in sel_cols if c != target] if sel_cols else []
-        impulse = st.sidebar.selectbox("Impulse(충격)", options=impulse_options, index=0) if impulse_options else None
-
-        lag = st.sidebar.slider("lag", 1, 10, 1)
-        horizon = st.sidebar.slider("horizon", 5, 30, 10)
-        standardize = st.sidebar.checkbox("z-score 표준화", True)
-        show_full_grid = st.sidebar.checkbox("IRF 전체 그리드(옵션)", False)
+        lag = st.sidebar.slider("VAR lag", min_value=1, max_value=10, value=1, key="var_lag")
+        horizon = st.sidebar.slider("IRF/FEVD horizon", min_value=5, max_value=30, value=10, key="var_h")
+        standardize = st.sidebar.checkbox("표준화(z-score) 후 적합", value=True, key="var_z")
+        show_full_grid = st.sidebar.checkbox("IRF 전체 그리드도 보기", value=False, key="var_grid")
 
         run_btn = st.button("VAR 실행", type="primary")
-
-        if "var_out" not in st.session_state:
-            st.session_state["var_out"] = None
-            st.session_state["var_params"] = None
 
         if run_btn:
             try:
                 with st.spinner("VAR 적합 중…"):
                     out = run_var_bundle(
                         df=df,
-                        selected_cols=sel_cols,
+                        selected_cols=selected_cols,
                         target=target,
                         lag=lag,
                         horizon=horizon,
@@ -507,86 +482,58 @@ def main():
                     )
                 st.session_state["var_out"] = out
                 st.session_state["var_params"] = {
-                    "sel_cols": sel_cols,
                     "target": target,
-                    "impulse": impulse,
-                    "lag": lag,
+                    "impulse": impulse_var,
                     "horizon": horizon,
-                    "standardize": standardize,
                     "show_full_grid": show_full_grid,
                 }
-                st.success(f"완료! (rows used: {out['rows_used']})")
+                st.success(f"완료! (학습 데이터 rows: {out['var_rows']})")
             except Exception as e:
+                st.error(f"VAR 실행 실패: {e}")
                 st.session_state["var_out"] = None
                 st.session_state["var_params"] = None
-                st.error(f"VAR 실행 실패: {e}")
 
         out = st.session_state.get("var_out")
         params = st.session_state.get("var_params")
 
-        if out is None:
-            st.info("왼쪽에서 변수 선택 후 **VAR 실행** 버튼을 눌러주세요.")
+        if not out:
+            st.info("왼쪽에서 변수 선택 후 **VAR 실행**을 눌러주세요.")
+            st.stop()
+
+        # 1) Granger
+        st.subheader("1) Granger 인과테스트 (x → target)")
+        st.caption("p-value가 작을수록 ‘x가 target을 그랜저 인과한다’는 근거가 강합니다(관행적으로 0.05 기준).")
+        st.dataframe(out["granger_table"], use_container_width=True)
+
+        st.divider()
+
+        # 2) IRF
+        st.subheader("2) IRF (Impulse → Target)")
+        irf = out["irf"]
+        imp = params.get("impulse")
+        tgt = params.get("target")
+
+        if imp and tgt:
+            fig = irf.plot(impulse=imp, response=tgt)
+            fig.set_size_inches(9, 4)
+            fig.tight_layout()
+            st.pyplot(fig, clear_figure=True)
         else:
-            # Granger
-            st.subheader("1) Granger 인과테스트 (x → target)")
-            st.caption("p-value가 작을수록 x가 target을 그랜저 인과한다는 근거가 강합니다(보통 0.05 기준).")
-            st.dataframe(out["granger"], use_container_width=True, height=320)
+            st.warning("IRF를 위해 impulse/target 설정이 필요합니다.")
 
-            st.divider()
+        if params.get("show_full_grid", False):
+            st.caption("전체 그리드는 변수가 많으면 겹쳐 보일 수 있어요.")
+            fig2 = irf.plot()
+            fig2.set_size_inches(12, 10)
+            fig2.tight_layout()
+            st.pyplot(fig2, clear_figure=True)
 
-            # IRF (1개 impulse -> 1개 target)
-            st.subheader("2) IRF (Impulse Response Functions)")
-            st.caption("발표/데모에서는 ‘impulse 1개 → target 1개’ 그래프가 가장 읽기 좋습니다.")
+        st.divider()
 
-            irf = out["irf"]
-            imp = params.get("impulse")
-            tgt = params.get("target")
-
-            if imp is None or tgt is None:
-                st.warning("Impulse/Target 설정이 필요합니다.")
-            else:
-                fig = irf.plot(impulse=imp, response=tgt)
-                fig.set_size_inches(10, 4.2)
-                fig.tight_layout()
-                st.pyplot(fig, clear_figure=True)
-
-                if params.get("show_full_grid", False):
-                    st.caption("전체 그리드는 변수가 많으면 겹쳐 보여요(옵션).")
-                    fig2 = irf.plot()
-                    fig2.set_size_inches(12, 9)
-                    fig2.tight_layout()
-                    st.pyplot(fig2, clear_figure=True)
-
-            st.divider()
-
-            # FEVD
-            st.subheader("3) FEVD 분산분해 (target 기준)")
-            st.caption("각 horizon에서 target 변동을 ‘어떤 shock(변수)이 얼마나 설명하는지(%)’를 보여줍니다.")
-            st.dataframe(out["fevd_tbl"], use_container_width=True, height=420)
-
-    # ======================
-    # TAB 3: Pipeline
-    # ======================
-    with tab3:
-        st.subheader("🧭 분석 파이프라인")
-        st.markdown(
-            f"""
-1. **데이터 로드**
-   - `data/{data_path.name}` 로드 → `time` 기준 정렬
-
-2. **CII(소비자 투자 인덱스) 계산**
-   - Google Trends(관심) + Sentiment(정서/부정 변동/볼륨)
-   - 컬럼명은 alias로 자동 매핑 (없으면 CII는 NaN)
-
-3. **Risk Signal**
-   - OI / Funding / Liquidation / Taker / M2
-   - 분위수(33/66%) 기반 🟢🟡🔴 신호
-
-4. **VAR Insight**
-   - 변수 선택 → (옵션) z-score → VAR 적합
-   - **Granger** 표 / **IRF** 그래프 / **FEVD** 표
-"""
-        )
+        # 3) FEVD
+        st.subheader("3) FEVD 분산분해 (target 기준)")
+        st.caption("각 horizon에서 target 변동을 ‘어떤 shock(변수)이 얼마나 설명하는지(%)’")
+        st.dataframe(out["fevd_table_target"], use_container_width=True)
 
 
 if __name__ == "__main__":
