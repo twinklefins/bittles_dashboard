@@ -35,7 +35,7 @@ def load_data(path: Path) -> pd.DataFrame:
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time"]).set_index("time").sort_index()
 
-    # 숫자형으로 강제 변환(문자 섞여있을 때 대비)
+    # object → numeric 시도 (문자 섞임 대비)
     for c in df.columns:
         if df[c].dtype == "object":
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -74,6 +74,10 @@ def percentile_signal(series: pd.Series, value: float, higher_is_risky: bool = T
     if series is None or series.dropna().empty or pd.isna(value):
         return "⚪️", 1
 
+    series = safe_to_numeric(series).dropna()
+    if series.empty:
+        return "⚪️", 1
+
     q1, q2 = series.quantile([0.33, 0.66])
 
     if higher_is_risky:
@@ -104,7 +108,7 @@ def last_valid_z_at_or_before(df: pd.DataFrame, col: str, ts: pd.Timestamp) -> T
         return None, None
 
     used_ts = s_upto.index[-1]
-    z = zscore(s)  # 전체기간 z-score(안정/간단)
+    z = zscore(s)  # 전체 기간 기준 zscore
     zv = z.loc[used_ts] if used_ts in z.index else None
     if zv is None or pd.isna(zv):
         return None, None
@@ -128,14 +132,17 @@ def compute_risk_signals(df: pd.DataFrame, row: pd.Series) -> Dict[str, Dict]:
         ("oi", "OI", col_oi, True),
         ("funding", "Funding", col_funding, True),
         ("liq", "Liquidation(USD)", col_liq, True),
-        ("taker", "Taker Bias", col_taker, True),        # 0.5에서 멀수록 쏠림(위험)
-        ("m2", "Global M2", col_m2, False),              # 유동성은 낮을수록 위험
+        ("taker", "Taker Bias", col_taker, True),   # 0.5에서 멀수록 위험
+        ("m2", "Global M2", col_m2, False),         # 낮을수록 위험(방어적으로)
     ]
 
     out = {}
     for key, label, col, higher_is_risky in indicators:
         if col is None or col not in df.columns:
-            out[key] = {"label": label, "col": None, "value": np.nan, "signal": "⚪️", "score": 1, "note": "컬럼 없음"}
+            out[key] = {
+                "label": label, "col": None, "value": np.nan,
+                "signal": "⚪️", "score": 1, "note": "컬럼 없음"
+            }
             continue
 
         v = row.get(col, np.nan)
@@ -145,17 +152,28 @@ def compute_risk_signals(df: pd.DataFrame, row: pd.Series) -> Dict[str, Dict]:
             dist = abs(float(v) - 0.5)
             series = (safe_to_numeric(df[col]) - 0.5).abs()
             sig, sc = percentile_signal(series, dist, higher_is_risky=True)
-            out[key] = {"label": label, "col": col, "value": float(v), "signal": sig, "score": sc, "note": f"|x-0.5|={dist:.3f}"}
+            out[key] = {
+                "label": label, "col": col, "value": float(v),
+                "signal": sig, "score": sc,
+                "note": f"|x-0.5|={dist:.3f}"
+            }
             continue
 
         # m2는 0이 결측표시일 수도 있어 방어 처리
         if key == "m2" and (pd.isna(v) or float(v) == 0.0):
-            out[key] = {"label": label, "col": col, "value": float(v) if not pd.isna(v) else np.nan, "signal": "⚪️", "score": 1, "note": "0/NaN (결측 가능)"}
+            out[key] = {
+                "label": label, "col": col, "value": float(v) if not pd.isna(v) else np.nan,
+                "signal": "⚪️", "score": 1, "note": "0/NaN (결측 가능)"
+            }
             continue
 
         series = safe_to_numeric(df[col])
         sig, sc = percentile_signal(series, float(v) if not pd.isna(v) else np.nan, higher_is_risky=higher_is_risky)
-        out[key] = {"label": label, "col": col, "value": float(v) if not pd.isna(v) else np.nan, "signal": sig, "score": sc, "note": ""}
+
+        out[key] = {
+            "label": label, "col": col, "value": float(v) if not pd.isna(v) else np.nan,
+            "signal": sig, "score": sc, "note": ""
+        }
 
     return out
 
@@ -181,7 +199,7 @@ def compute_market_mood_index(
     mmi_base = (base / 2.0) * 100.0
 
     # 2) Optional bonus (lookback)
-    # 너희가 말한 컬럼명 우선으로 후보를 넓게 잡음
+    # 네가 어제 정리해둔 컬럼명 우선 반영
     col_sent = find_col(df, ["rd_avg_sent", "avg_sent", "sentiment"])
     col_gt = find_col(df, ["gt_btc_z14", "gtrend_btc_z14", "gt_bitcoin", "gtrend_btc"])
 
@@ -189,21 +207,37 @@ def compute_market_mood_index(
     used_inputs = []
     min_ts = ts - pd.Timedelta(days=lookback_days)
 
-    # sentiment
+    # sentiment bonus
     if col_sent and col_sent in df.columns:
         zv, used_ts = last_valid_z_at_or_before(df, col_sent, ts)
         if used_ts is not None and used_ts >= min_ts:
-            contrib = float(zv) * 6.0
+            w = 6.0
+            contrib = float(zv) * w
             bonus += contrib
-            used_inputs.append({"type": "sentiment", "col": col_sent, "z": float(zv), "weight": 6.0, "contrib": contrib, "used_ts": used_ts})
+            used_inputs.append({
+                "type": "sentiment",
+                "col": col_sent,
+                "z": float(zv),
+                "weight": w,
+                "contrib": contrib,
+                "used_ts": used_ts,
+            })
 
-    # google trends / attention
+    # attention bonus
     if col_gt and col_gt in df.columns:
         zv, used_ts = last_valid_z_at_or_before(df, col_gt, ts)
         if used_ts is not None and used_ts >= min_ts:
-            contrib = float(zv) * 4.0
+            w = 4.0
+            contrib = float(zv) * w
             bonus += contrib
-            used_inputs.append({"type": "attention", "col": col_gt, "z": float(zv), "weight": 4.0, "contrib": contrib, "used_ts": used_ts})
+            used_inputs.append({
+                "type": "attention",
+                "col": col_gt,
+                "z": float(zv),
+                "weight": w,
+                "contrib": contrib,
+                "used_ts": used_ts,
+            })
 
     mmi = float(np.clip(mmi_base + bonus, 0, 100))
 
@@ -229,10 +263,17 @@ def compute_market_mood_index(
         "lookback_days": lookback_days,
         "base_avg_score(0~2)": base,
         "mmi_base(0~100)": mmi_base,
-        "bonus": bonus,
-        "final_mmi": mmi,
+        "bonus": float(bonus),
+        "final_mmi": float(mmi),
         "risk_inputs_used": [
-            {"key": k, "label": v.get("label"), "col": v.get("col"), "score": v.get("score"), "signal": v.get("signal"), "note": v.get("note", "")}
+            {
+                "key": k,
+                "label": v.get("label"),
+                "col": v.get("col"),
+                "score": v.get("score"),
+                "signal": v.get("signal"),
+                "note": v.get("note", ""),
+            }
             for k, v in signals.items()
         ],
         "optional_inputs_used": used_inputs,
@@ -247,54 +288,58 @@ def draw_gauge(score: float, level: str):
     반원 게이지(0~100) - matplotlib
     """
     bands = [
-        (0, 20, "#2E86FF"),
-        (20, 40, "#2ECC71"),
-        (40, 60, "#F1C40F"),
-        (60, 80, "#E67E22"),
-        (80, 100, "#E74C3C"),
+        (0, 20, "#2E86FF"),    # Calm
+        (20, 40, "#2ECC71"),   # Stable
+        (40, 60, "#F1C40F"),   # Warm
+        (60, 80, "#E67E22"),   # Hot
+        (80, 100, "#E74C3C"),  # Too Hot
     ]
 
     fig, ax = plt.subplots(figsize=(9, 4.6))
     ax.set_aspect("equal")
     ax.axis("off")
 
-    # band
+    # 밴드
     for a, b, color in bands:
         theta1 = 180 * (1 - a / 100)
         theta2 = 180 * (1 - b / 100)
-        wedge = plt.matplotlib.patches.Wedge((0, 0), 1.0, theta2, theta1, width=0.18, color=color, alpha=0.95)
+        wedge = plt.matplotlib.patches.Wedge(
+            (0, 0), 1.0, theta2, theta1,
+            width=0.18, color=color, alpha=0.95
+        )
         ax.add_patch(wedge)
 
-    # ticks
+    # 눈금
     for t in range(0, 101, 10):
-        ang = math.radians(180 * (1 - t / 100))
-        x1, y1 = 0.82 * math.cos(ang), 0.82 * math.sin(ang)
-        x2, y2 = 0.90 * math.cos(ang), 0.90 * math.sin(ang)
+        ang_t = math.radians(180 * (1 - t / 100))
+        x1, y1 = 0.82 * math.cos(ang_t), 0.82 * math.sin(ang_t)
+        x2, y2 = 0.90 * math.cos(ang_t), 0.90 * math.sin(ang_t)
         ax.plot([x1, x2], [y1, y2], linewidth=1, color="#D0D0D0")
         if t in [0, 50, 100]:
-            xt, yt = 0.68 * math.cos(ang), 0.68 * math.sin(ang)
+            xt, yt = 0.68 * math.cos(ang_t), 0.68 * math.sin(ang_t)
             ax.text(xt, yt, str(t), ha="center", va="center", fontsize=11, color="#777777")
 
-    # needle (✅ 누락되면 바로 꼬임)
+    # 바늘(각도/좌표 반드시 정의)
     ang = math.radians(180 * (1 - score / 100))
     nx, ny = 0.74 * math.cos(ang), 0.74 * math.sin(ang)
+
     ax.plot([0, nx], [0, ny], linewidth=4, color="#222222", zorder=2)
     ax.add_patch(plt.matplotlib.patches.Circle((0, 0), 0.04, color="#222222", zorder=3))
 
-    # center text (needle 위)
+    # 중앙 텍스트 (바늘 위로 + 배경)
     ax.text(
         0, 0.20, f"{score:.0f}",
         ha="center", va="center",
         fontsize=36, fontweight="bold", color="#111111",
         zorder=10,
-        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.9),
+        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.92)
     )
     ax.text(
         0, 0.06, level,
         ha="center", va="center",
         fontsize=14, color="#333333",
         zorder=10,
-        bbox=dict(boxstyle="round,pad=0.20", fc="white", ec="none", alpha=0.9),
+        bbox=dict(boxstyle="round,pad=0.20", fc="white", ec="none", alpha=0.92)
     )
 
     ax.set_xlim(-1.05, 1.05)
@@ -303,7 +348,7 @@ def draw_gauge(score: float, level: str):
 
 
 # ======================
-# VAR helpers (FEVD shape 안정화)
+# VAR helpers
 # ======================
 def zscore_df(df: pd.DataFrame) -> pd.DataFrame:
     mean = df.mean()
@@ -328,7 +373,6 @@ def run_var_bundle(df: pd.DataFrame, selected_cols: List[str], target: str, lag:
     model = VAR(data)
     res = model.fit(lag)
 
-    # Granger
     rows = []
     for x in selected_cols:
         if x == target:
@@ -338,12 +382,11 @@ def run_var_bundle(df: pd.DataFrame, selected_cols: List[str], target: str, lag:
             rows.append({"causing(x)": x, "pvalue": float(test.pvalue), "stat": float(test.test_statistic)})
         except Exception as e:
             rows.append({"causing(x)": x, "pvalue": np.nan, "stat": np.nan, "error": str(e)})
+
     granger = pd.DataFrame(rows).sort_values("pvalue", na_position="last").reset_index(drop=True)
 
-    # IRF
     irf = res.irf(horizon)
 
-    # FEVD (shape 대응)
     fevd = res.fevd(horizon)
     decomp = np.array(fevd.decomp)  # (steps, response, impulse)
     names = list(res.names)
@@ -389,9 +432,7 @@ def main():
 
     tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧠 Market Mood", "🧩 VAR Insight"])
 
-    # -----------------------
-    # Sidebar - 공통 날짜(내림차순)
-    # -----------------------
+    # Sidebar 날짜 (최근이 위)
     st.sidebar.header("설정")
     dates = sorted(pd.unique(df.index.date), reverse=True)
     sel_date = st.sidebar.selectbox("기준 날짜(최근이 위)", dates, format_func=lambda d: d.strftime("%Y-%m-%d"))
@@ -412,7 +453,7 @@ def main():
     signals = compute_risk_signals(df, row)
 
     # -----------------------
-    # TAB 1: Risk Signal
+    # TAB 1
     # -----------------------
     with tab1:
         st.subheader(f"기준 데이터 날짜: {row.name:%Y-%m-%d}")
@@ -422,7 +463,8 @@ def main():
 
         for ui, key in zip(cols, order):
             item = signals[key]
-            label, colname, v, sig = item["label"], item["col"], item["value"], item["signal"]
+            label, colname = item["label"], item["col"]
+            v, sig = item["value"], item["signal"]
 
             if colname is None or pd.isna(v):
                 ui.metric(label, "N/A")
@@ -437,10 +479,7 @@ def main():
                         delta_txt = None
                     else:
                         dv = float(v) - pv
-                        if abs(dv) < 1:
-                            delta_txt = f"{dv:+.4f}"
-                        else:
-                            delta_txt = f"{dv:+,.0f}" if abs(dv) > 1000 else f"{dv:+.4g}"
+                        delta_txt = f"{dv:+.4g}"
                 except Exception:
                     delta_txt = None
 
@@ -453,26 +492,25 @@ def main():
             ui.caption(cap)
 
         st.divider()
-
         score_list = [signals[k]["score"] for k in order if signals[k]["signal"] != "⚪️"]
         avg_score = float(np.mean(score_list)) if score_list else 1.0
 
         if avg_score < 0.5:
-            st.success("🟢 과열 신호는 약합니다. 급변 시에도 ‘원인(청산/펀딩/쏠림)’부터 확인!")
+            st.success("🟢 과열 신호는 약합니다.")
         elif avg_score < 1.2:
-            st.info("🟡 변동성 확대 가능 구간입니다. 패닉셀보다는 구조(청산/펀딩/쏠림)를 점검하세요.")
+            st.info("🟡 변동성 확대 가능 구간입니다.")
         else:
             st.warning("🟠~🔴 과열/쏠림 신호가 늘었습니다. 레버리지/포지션 크기 관리가 중요합니다.")
 
-        with st.expander("원본 데이터 미리보기 (가로 스크롤 가능)"):
+        with st.expander("원본 데이터 미리보기"):
             st.dataframe(df.tail(50), use_container_width=True, height=420)
 
     # -----------------------
-    # TAB 2: Market Mood
+    # TAB 2
     # -----------------------
     with tab2:
         st.subheader("🧠 Market Mood")
-        st.caption("Risk Signal(레버리지/쏠림/유동성) + (가능하면) 관심/감성 정보를 합쳐 0~100 지수로 요약합니다.")
+        st.caption("Risk Signal + (가능하면) Google Trends / Reddit Sentiment 보정으로 0~100 지수로 요약합니다.")
 
         mmi, level, desc, explain = compute_market_mood_index(df, row, signals, lookback_days=60)
 
@@ -500,43 +538,28 @@ def main():
                   </div>
                 </div>
                 """,
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
 
-            # ✅ 과거값 계산(4개 리턴 대응 / Cloud redacted 에러 방지)
+            # ✅ 여기! 과거값 계산에서 “리턴값 4개” 안전하게 처리
             def get_past_value(days: int) -> Optional[float]:
-                try:
-                    cur_ts = row.name
-                    if not isinstance(cur_ts, pd.Timestamp):
-                        cur_ts = pd.Timestamp(cur_ts)
-
-                    target_ts = cur_ts - pd.Timedelta(days=days)
-                    past = df.loc[:target_ts]
-                    if past.empty:
-                        return None
-
-                    past_row = past.iloc[-1]
-                    past_signals = compute_risk_signals(df, past_row)
-                    mmi_past, _, _, _ = compute_market_mood_index(df, past_row, past_signals, lookback_days=60)
-                    if mmi_past is None or (isinstance(mmi_past, float) and np.isnan(mmi_past)):
-                        return None
-                    return float(mmi_past)
-                except Exception as e:
-                    st.warning(f"과거 MMI({days}d) 계산 실패: {e}")
+                ts = row.name - pd.Timedelta(days=days)
+                past = df.loc[:ts]
+                if past.empty:
                     return None
+                past_row = past.iloc[-1]
+                past_signals = compute_risk_signals(df, past_row)
+                val, _, _, _ = compute_market_mood_index(df, past_row, past_signals, lookback_days=60)
+                return float(val)
 
-            p1 = get_past_value(1)
-            p7 = get_past_value(7)
-            p30 = get_past_value(30)
-            p90 = get_past_value(90)
+            p1, p7, p30, p90 = get_past_value(1), get_past_value(7), get_past_value(30), get_past_value(90)
 
             st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='border:1px solid #E8E8E8; border-radius:14px; padding:16px;'>"
                 "<div style='font-size:16px; font-weight:700; margin-bottom:10px;'>기간별 지수</div>",
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
-
             r1, r2 = st.columns(2)
             with r1:
                 st.metric("1일 전", "N/A" if p1 is None else f"{p1:.0f}")
@@ -544,37 +567,34 @@ def main():
             with r2:
                 st.metric("1개월 전", "N/A" if p30 is None else f"{p30:.0f}")
                 st.metric("3개월 전", "N/A" if p90 is None else f"{p90:.0f}")
-
             st.markdown("</div>", unsafe_allow_html=True)
 
             with st.expander("🔍 Market Mood 계산 상세 (어떤 컬럼이 반영됐는지)"):
-                st.markdown("### 1) 기본값(Base): Risk Signal 평균 → 0~100")
+                st.markdown("### 1) Base: Risk Signal 평균 → 0~100")
                 st.write(f"- 평균 점수(0~2): **{explain['base_avg_score(0~2)']:.2f}**")
                 st.write(f"- Base MMI(0~100): **{explain['mmi_base(0~100)']:.1f}**")
 
-                st.markdown("### 2) 보정값(Bonus): Sentiment / Google Trends (있을 때만 + lookback 적용)")
+                st.markdown("### 2) Bonus: Sentiment / Google Trends (있을 때만)")
                 if len(explain["optional_inputs_used"]) == 0:
-                    st.info("이번 날짜 기준으로는 sentiment/trends 보정이 적용되지 않았습니다. (컬럼이 없거나, 최근 60일 내 유효값이 없음)")
+                    st.info("이번 날짜 기준으로는 bonus가 적용되지 않았습니다. (컬럼이 없거나, 최근 60일 내 유효값이 없음)")
                     st.write("후보 컬럼 탐지 결과:", explain["optional_candidates"])
                 else:
                     bonus_df = pd.DataFrame(explain["optional_inputs_used"])
                     bonus_df["used_ts"] = bonus_df["used_ts"].astype(str)
                     st.dataframe(bonus_df, use_container_width=True)
 
-                st.markdown("### 3) Risk Signal에 실제로 사용된 컬럼들")
-                risk_df = pd.DataFrame(explain["risk_inputs_used"])
-                st.dataframe(risk_df, use_container_width=True)
+                st.markdown("### 3) Risk Signal에 실제로 사용된 컬럼")
+                st.dataframe(pd.DataFrame(explain["risk_inputs_used"]), use_container_width=True)
 
-                st.markdown("### 4) 최종 MMI")
+                st.markdown("### 4) 최종")
                 st.write(f"- Bonus 합계: **{explain['bonus']:+.2f}**")
                 st.write(f"- 최종 MMI: **{explain['final_mmi']:.1f} ({level})**")
 
         st.divider()
-        st.markdown("#### 구간 안내")
-        st.write("🔵 Calm → 🟢 Stable → 🟡 Warm → 🟠 Hot → 🔴 Too Hot")
+        st.write("구간 안내: 🔵 Calm → 🟢 Stable → 🟡 Warm → 🟠 Hot → 🔴 Too Hot")
 
     # -----------------------
-    # TAB 3: VAR Insight
+    # TAB 3
     # -----------------------
     with tab3:
         st.subheader("🧩 VAR Insight")
@@ -623,4 +643,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
+    
