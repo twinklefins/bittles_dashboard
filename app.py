@@ -151,38 +151,91 @@ def compute_risk_signals(df: pd.DataFrame, row: pd.Series) -> Dict[str, Dict]:
 
     return out
 
+def safe_to_numeric(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan)
 
-def compute_market_mood_index(df: pd.DataFrame, row: pd.Series, signals: Dict[str, Dict]) -> Tuple[float, str, str]:
+def last_valid_z_at_or_before(df: pd.DataFrame, col: str, ts: pd.Timestamp) -> Tuple[Optional[float], Optional[pd.Timestamp]]:
+    """
+    ts 시점 '이전/당일'에서 col의 마지막 유효값을 찾아 z-score 값을 반환
+    returns: (z_value, used_timestamp)
+    """
+    if col is None or col not in df.columns:
+        return None, None
+
+    s = safe_to_numeric(df[col])
+    s_upto = s.loc[:ts].dropna()
+    if s_upto.empty:
+        return None, None
+
+    used_ts = s_upto.index[-1]
+    z = zscore(s.dropna())  # 전체기간 zscore(간단/안정)
+    zv = z.loc[used_ts] if used_ts in z.index else None
+    if pd.isna(zv):
+        return None, None
+    return float(zv), used_ts
+
+
+def compute_market_mood_index(
+    df: pd.DataFrame,
+    row: pd.Series,
+    signals: Dict[str, Dict],
+    lookback_days: int = 60,
+) -> Tuple[float, str, str, Dict[str, object]]:
     """
     MMI: 0~100 (낮을수록 Calm, 높을수록 Too Hot)
-    - 기본은 Risk Signal 점수 평균(0~2)을 0~100으로 스케일
-    - 데이터에 avg_sent / gtrend_btc_z14가 있으면 약간 가중치로 보정
+    - base: Risk Signal 점수 평균(0~2) → 0~100
+    - bonus: (가능하면) sentiment / google trends를 lookback으로 보정
+    - explain: 어떤 컬럼이 실제로 반영되었는지 리포트(dict) 반환
     """
-    # 1) risk score 기반
-    scores = [v["score"] for v in signals.values() if v["signal"] != "⚪️"]
-    base = float(np.mean(scores)) if scores else 1.0  # 0~2
-    mmi = (base / 2.0) * 100.0
+    ts = row.name if isinstance(row.name, pd.Timestamp) else pd.Timestamp(row.name)
 
-    # 2) sentiment / attention 있으면 보정(있을 때만)
+    # 1) Base = Risk score 평균
+    used_signals = {k: v for k, v in signals.items() if v.get("signal") != "⚪️"}
+    scores = [v["score"] for v in used_signals.values()]  # 0~2
+    base = float(np.mean(scores)) if scores else 1.0
+    mmi_base = (base / 2.0) * 100.0
+
+    # 2) Optional bonus (lookback)
     col_sent = find_col(df, ["avg_sent", "sentiment", "rd_avg_sent"])
     col_gt = find_col(df, ["gtrend_btc_z14", "gt_btc_z14", "gt_bitcoin", "gtrend_btc"])
 
     bonus = 0.0
+    used_inputs = []
+
+    # lookback window 제한(너무 옛날 값 끌어오면 해석이 애매해서)
+    min_ts = ts - pd.Timedelta(days=lookback_days)
+
+    # sentiment
     if col_sent and col_sent in df.columns:
-        zsent = zscore(pd.to_numeric(df[col_sent], errors="coerce"))
-        if row.name in zsent.index and not pd.isna(zsent.loc[row.name]):
-            # 긍정이면 과열(탐욕) 방향, 부정이면 공포 방향으로 살짝 이동
-            bonus += float(zsent.loc[row.name]) * 6.0
+        zv, used_ts = last_valid_z_at_or_before(df, col_sent, ts)
+        if used_ts is not None and used_ts >= min_ts:
+            bonus += float(zv) * 6.0
+            used_inputs.append({
+                "type": "sentiment",
+                "col": col_sent,
+                "z": float(zv),
+                "weight": 6.0,
+                "contrib": float(zv) * 6.0,
+                "used_ts": used_ts,
+            })
 
+    # google trends / attention
     if col_gt and col_gt in df.columns:
-        zgt = zscore(pd.to_numeric(df[col_gt], errors="coerce"))
-        if row.name in zgt.index and not pd.isna(zgt.loc[row.name]):
-            # 관심 급증은 과열/변동성 확대 방향으로 살짝
-            bonus += float(zgt.loc[row.name]) * 4.0
+        zv, used_ts = last_valid_z_at_or_before(df, col_gt, ts)
+        if used_ts is not None and used_ts >= min_ts:
+            bonus += float(zv) * 4.0
+            used_inputs.append({
+                "type": "attention",
+                "col": col_gt,
+                "z": float(zv),
+                "weight": 4.0,
+                "contrib": float(zv) * 4.0,
+                "used_ts": used_ts,
+            })
 
-    mmi = float(np.clip(mmi + bonus, 0, 100))
+    mmi = float(np.clip(mmi_base + bonus, 0, 100))
 
-    # 3) 레벨/문구
+    # 3) Level & description
     if mmi < 20:
         level = "Calm"
         desc = "조용한 바다. 과열 신호가 거의 없고, 노이즈 장세일 확률이 큽니다."
@@ -199,8 +252,22 @@ def compute_market_mood_index(df: pd.DataFrame, row: pd.Series, signals: Dict[st
         level = "Too Hot"
         desc = "과열 경보. 급변(청산/쏠림) 가능성이 높아 레버리지/포지션 관리를 권장합니다."
 
-    return mmi, level, desc
+    explain = {
+        "ts": ts,
+        "lookback_days": lookback_days,
+        "base_avg_score(0~2)": base,
+        "mmi_base(0~100)": mmi_base,
+        "bonus": bonus,
+        "final_mmi": mmi,
+        "risk_inputs_used": [
+            {"key": k, "label": v.get("label"), "col": v.get("col"), "score": v.get("score"), "signal": v.get("signal"), "note": v.get("note", "")}
+            for k, v in signals.items()
+        ],
+        "optional_inputs_used": used_inputs,
+        "optional_candidates": {"sentiment_col": col_sent, "attention_col": col_gt},
+    }
 
+    return mmi, level, desc, explain
 
 def draw_gauge(score: float, level: str):
     """
@@ -453,7 +520,7 @@ def main():
         st.subheader("🧠 Market Mood")
         st.caption("Risk Signal(레버리지/쏠림/유동성) + (가능하면) 관심/감성 정보를 합쳐 0~100 지수로 요약합니다.")
 
-        mmi, level, desc = compute_market_mood_index(df, row, signals)
+        mmi, level, desc, explain = compute_market_mood_index(df, row, signals, lookback_days=60)
 
         # 게이지 + 설명 카드 2열
         left, right = st.columns([1.25, 1], gap="large")
@@ -517,6 +584,28 @@ def main():
                 st.metric("3개월 전", "N/A" if p90 is None else f"{p90:.0f}")
 
             st.markdown("</div>", unsafe_allow_html=True)
+
+            with st.expander("🔍 Market Mood 계산 상세 (어떤 컬럼이 반영됐는지)"):
+                st.markdown("### 1) 기본값(Base): Risk Signal 평균 → 0~100")
+                st.write(f"- 평균 점수(0~2): **{explain['base_avg_score(0~2)']:.2f}**")
+                st.write(f"- Base MMI(0~100): **{explain['mmi_base(0~100)']:.1f}**")
+
+                st.markdown("### 2) 보정값(Bonus): Sentiment / Google Trends (있을 때만 + lookback 적용)")
+                if len(explain["optional_inputs_used"]) == 0:
+                    st.info("이번 날짜 기준으로는 sentiment/trends 보정이 적용되지 않았습니다. (컬럼이 없거나, 최근 60일 내 유효값이 없음)")
+                    st.write("후보 컬럼 탐지 결과:", explain["optional_candidates"])
+                else:
+                    bonus_df = pd.DataFrame(explain["optional_inputs_used"])
+                    bonus_df["used_ts"] = bonus_df["used_ts"].astype(str)
+                    st.dataframe(bonus_df, use_container_width=True)
+
+                st.markdown("### 3) Risk Signal에 실제로 사용된 컬럼들")
+                risk_df = pd.DataFrame(explain["risk_inputs_used"])
+                st.dataframe(risk_df, use_container_width=True)
+
+                st.markdown("### 4) 최종 MMI")
+                st.write(f"- Bonus 합계: **{explain['bonus']:+.2f}**")
+                st.write(f"- 최종 MMI: **{explain['final_mmi']:.1f} ({level})**")
 
         st.divider()
         st.markdown("#### 구간 안내")
