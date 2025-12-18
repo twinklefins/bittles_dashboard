@@ -574,17 +574,37 @@ def main():
                 st.write(f"- 평균 점수(0~2): **{explain['base_avg_score(0~2)']:.2f}**")
                 st.write(f"- Base MMI(0~100): **{explain['mmi_base(0~100)']:.1f}**")
 
-                st.markdown("### 2) Bonus: Sentiment / Google Trends (있을 때만)")
+                st.markdown("### 2) Risk Signal에 실제로 사용된 컬럼")
+                st.dataframe(pd.DataFrame(explain["risk_inputs_used"]), use_container_width=True)
+
+                st.markdown("### 3) Bonus: Sentiment / Google Trends (있을 때만)")
+                st.markdown(
+                    """
+                **왜 Bonus를 쓰나?**  
+                행동 데이터(OI/청산/펀딩)가 시장의 ‘구조’를 보여준다면,  
+                Sentiment와 관심도는 **그 구조에 사람들이 얼마나 반응하고 있는지**를 보여줍니다.
+
+                **가중치 설계**
+                - Sentiment × 6  
+                → 공포·탐욕은 단기 변동성에 직접적인 영향을 주기 때문
+                - Google Trends × 4  
+                → 관심 급증은 과열의 보조 신호 (후행 가능성 고려)
+
+                ⚠️ Bonus는 Base를 뒤집지 않고, **설명력만 보강**합니다.
+                """
+                )
                 if len(explain["optional_inputs_used"]) == 0:
-                    st.info("이번 날짜 기준으로는 bonus가 적용되지 않았습니다. (컬럼이 없거나, 최근 60일 내 유효값이 없음)")
-                    st.write("후보 컬럼 탐지 결과:", explain["optional_candidates"])
+                    st.info(
+                        "이번 날짜에는 **심리/관심 보정이 적용되지 않았습니다.**\n\n"
+                        "- 해당 컬럼이 데이터에 없거나\n"
+                        "- 최근 60일 이내 유효한 값이 없기 때문입니다.\n\n"
+                        "→ 이 경우 Market Mood는 **행동 데이터만으로 계산**됩니다."
+                    )
+                    st.write("🔎 탐지된 후보 컬럼:", explain["optional_candidates"])
                 else:
                     bonus_df = pd.DataFrame(explain["optional_inputs_used"])
                     bonus_df["used_ts"] = bonus_df["used_ts"].astype(str)
                     st.dataframe(bonus_df, use_container_width=True)
-
-                st.markdown("### 3) Risk Signal에 실제로 사용된 컬럼")
-                st.dataframe(pd.DataFrame(explain["risk_inputs_used"]), use_container_width=True)
 
                 st.markdown("### 4) 최종")
                 st.write(f"- Bonus 합계: **{explain['bonus']:+.2f}**")
