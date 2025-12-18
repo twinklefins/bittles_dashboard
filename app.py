@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 
 from statsmodels.tsa.api import VAR
 
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import grangercausalitytests
+
 
 # ======================
 # Paths
@@ -113,6 +116,85 @@ def last_valid_z_at_or_before(df: pd.DataFrame, col: str, ts: pd.Timestamp) -> T
     if zv is None or pd.isna(zv):
         return None, None
     return float(zv), used_ts
+
+def build_mmi_series(df: pd.DataFrame, lookback_days: int = 60) -> pd.Series:
+    """df 전체에 대해 MMI 시계열을 계산해서 Series로 반환"""
+    mmi_vals = []
+    for ts, row in df.iterrows():
+        sig = compute_risk_signals(df, row)
+        mmi, _, _, _ = compute_market_mood_index(df, row, sig, lookback_days=lookback_days)
+        mmi_vals.append(mmi)
+    return pd.Series(mmi_vals, index=df.index, name="MMI")
+
+
+def run_significance_bundle(
+    df: pd.DataFrame,
+    mmi_col: str = "MMI",
+    ret_col: str = "ret_log_1d",
+    forward_days: int = 1,
+    hac_lags: int = 5,
+    granger_maxlag: int = 5,
+):
+    """
+    1) 상관(Pearson)
+    2) 회귀(OLS + HAC robust)
+    3) Granger (MMI -> returns)
+    """
+    out = {}
+
+    if mmi_col not in df.columns:
+        raise ValueError(f"'{mmi_col}' 컬럼이 없습니다. 먼저 MMI 시계열을 생성하세요.")
+    if ret_col not in df.columns:
+        raise ValueError(f"'{ret_col}' 컬럼이 없습니다. (예: ret_log_1d)")
+
+    tmp = df[[mmi_col, ret_col]].copy()
+    tmp[mmi_col] = pd.to_numeric(tmp[mmi_col], errors="coerce")
+    tmp[ret_col] = pd.to_numeric(tmp[ret_col], errors="coerce")
+    tmp = tmp.dropna()
+
+    # 미래 수익률(선행 검정)
+    tmp["ret_fwd"] = tmp[ret_col].shift(-forward_days)
+    tmp["absret_fwd"] = tmp["ret_fwd"].abs()
+    tmp = tmp.dropna()
+
+    # z-score
+    tmp["MMI_z"] = (tmp[mmi_col] - tmp[mmi_col].mean()) / tmp[mmi_col].std()
+
+    # 1) correlation
+    out["corr_ret"] = float(tmp[mmi_col].corr(tmp["ret_fwd"]))
+    out["corr_absret"] = float(tmp[mmi_col].corr(tmp["absret_fwd"]))
+
+    # 2) regression HAC
+    X = sm.add_constant(tmp["MMI_z"])
+    y1 = tmp["ret_fwd"]
+    y2 = tmp["absret_fwd"]
+
+    res1 = sm.OLS(y1, X).fit(cov_type="HAC", cov_kwds={"maxlags": hac_lags})
+    res2 = sm.OLS(y2, X).fit(cov_type="HAC", cov_kwds={"maxlags": hac_lags})
+
+    # 표로 쓰기 쉬운 요약
+    def coef_table(res):
+        coef = res.params.get("MMI_z", np.nan)
+        pval = res.pvalues.get("MMI_z", np.nan)
+        tval = res.tvalues.get("MMI_z", np.nan)
+        return {"coef(MMI_z)": float(coef), "t": float(tval), "pvalue": float(pval)}
+
+    out["reg_ret"] = coef_table(res1)
+    out["reg_absret"] = coef_table(res2)
+
+    # 3) Granger (MMI -> ret)
+    # grangercausalitytests는 [y, x] 순서
+    gdf = tmp[["ret_fwd", mmi_col]].dropna().rename(columns={mmi_col: "MMI"})
+    g = grangercausalitytests(gdf[["ret_fwd", "MMI"]], maxlag=granger_maxlag, verbose=False)
+
+    pvals = []
+    for lag in range(1, granger_maxlag + 1):
+        p = g[lag][0]["ssr_ftest"][1]
+        pvals.append({"lag": lag, "pvalue": float(p)})
+
+    out["granger_pvals"] = pd.DataFrame(pvals)
+
+    return out
 
 
 # ======================
@@ -430,7 +512,7 @@ def main():
     if df.empty:
         return
 
-    tab1, tab2, tab3 = st.tabs(["🚦 Risk Signal", "🧠 Market Mood", "🧩 VAR Insight"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🚦 Risk Signal", "🧠 Market Mood", "🧩 VAR Insight", "🧪 Significance Test"])
 
     # Sidebar 날짜 (최근이 위)
     st.sidebar.header("설정")
@@ -660,6 +742,73 @@ def main():
             except Exception as e:
                 st.error(f"VAR 실행 실패: {e}")
 
+    # -----------------------
+    # TAB 4
+    # -----------------------
+    with tab4:
+        st.subheader("🧪 유의성 검정: Market Mood → Price")
+        st.caption("MMI가 미래 수익률/변동성을 선행 설명하는지 (상관/회귀/HAC/Granger)로 확인합니다.")
+
+        # 1) MMI 시계열 생성(캐시 추천)
+        @st.cache_data(show_spinner=False)
+        def get_mmi_df(_df: pd.DataFrame) -> pd.DataFrame:
+            dfx = _df.copy()
+            dfx["MMI"] = build_mmi_series(dfx, lookback_days=60)
+            return dfx
+
+        df2 = get_mmi_df(df)
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ret_col = st.selectbox("수익률 컬럼", [c for c in df2.columns if "ret" in c.lower()], index=0)
+        with c2:
+            fwd = st.selectbox("미래 시차 (days)", [1, 3, 7], index=0)
+        with c3:
+            maxlag = st.selectbox("Granger maxlag", [3, 5, 7, 10], index=1)
+
+        if st.button("검정 실행", type="primary"):
+            try:
+                out = run_significance_bundle(
+                    df=df2,
+                    mmi_col="MMI",
+                    ret_col=ret_col,
+                    forward_days=int(fwd),
+                    hac_lags=5,
+                    granger_maxlag=int(maxlag),
+                )
+
+                st.markdown("### 1) 상관관계")
+                st.write(f"- Corr(MMI, future return): **{out['corr_ret']:.4f}**")
+                st.write(f"- Corr(MMI, future |return|): **{out['corr_absret']:.4f}**")
+
+                st.markdown("### 2) 회귀 (OLS + HAC robust)")
+                reg_tbl = pd.DataFrame([
+                    {"model": f"future return (t+{fwd})", **out["reg_ret"]},
+                    {"model": f"future |return| (t+{fwd})", **out["reg_absret"]},
+                ])
+                st.dataframe(reg_tbl, use_container_width=True)
+
+                st.markdown("### 3) Granger (MMI → future return)")
+                st.dataframe(out["granger_pvals"], use_container_width=True)
+
+                best = out["granger_pvals"].sort_values("pvalue").iloc[0]
+                if best["pvalue"] < 0.05:
+                    st.success(f"✅ Granger 유의: lag={int(best['lag'])}, p={best['pvalue']:.4f} → MMI가 수익률을 선행 설명할 가능성이 있습니다.")
+                else:
+                    st.info(f"ℹ️ Granger 유의 증거 약함: 최저 p={best['pvalue']:.4f} (maxlag={maxlag})")
+
+            except Exception as e:
+                st.error(f"검정 실패: {e}")
+
+        with st.expander("해석 가이드(팀 공유용)"):
+            st.markdown(
+                """
+    - **상관**: 같이 움직이는 경향(인과 아님)
+    - **회귀 p-value < 0.05**: MMI가 미래 수익률/변동성을 설명하는 통계적 근거
+    - **Granger p-value < 0.05**: MMI가 수익률을 '선행'하는 패턴이 있다는 근거
+    - 일반적으로 **방향(수익률)** 보다 **위험(|수익률|/변동성)** 쪽이 더 잘 나오는 경우가 많습니다.
+    """
+            )
 
 if __name__ == "__main__":
     main()
