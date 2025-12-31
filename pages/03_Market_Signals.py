@@ -2,161 +2,551 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
 
+import numpy as np
+import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+import plotly.io as pio
+import streamlit.components.v1 as components
 
 from components.styles import inject_styles
 from components.header import render_header
 from data.loader import load_df
 
 
-# ======================
-# Paths
-# ======================
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT_DIR / "data" / "df_draft_1209_w.sti.csv"
 
 
-# ======================
+# ----------------------
 # UI helpers
-# ======================
+# ----------------------
 def spacer(h: int = 32) -> None:
-    st.markdown(f"<div style='height:{h}px'></div>", unsafe_allow_html=True)
+    # negative spacer는 Streamlit 레이아웃상 기대처럼 안 먹는 경우가 많아서 0 이상만 허용
+    st.markdown(f"<div style='height:{max(0, int(h))}px'></div>", unsafe_allow_html=True)
 
 
-def section_title(title: str, subtitle: str | None = None) -> None:
+def section_title(title: str, subtitle: str = "") -> None:
     st.markdown(f"<div class='mm-block-title'>{title}</div>", unsafe_allow_html=True)
     if subtitle:
         st.markdown(f"<div class='mm-block-sub'>{subtitle}</div>", unsafe_allow_html=True)
 
 
-def render_signal_tile(name: str, status: str, one_liner: str, meta: str = "") -> None:
-    st.markdown(
-        f"""
-        <div class="mm-mini-card">
-          <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
-            <div style="font-weight:800;">{name}</div>
-            <div style="font-weight:900;">{status}</div>
-          </div>
-          <div style="margin-top:8px; opacity:.70; line-height:1.4;">{one_liner}</div>
-          {"<div style='margin-top:8px; opacity:.45; font-size:12px;'>" + meta + "</div>" if meta else ""}
+def _window_df(df: pd.DataFrame, end_ts: pd.Timestamp, days: int = 120) -> pd.DataFrame:
+    if end_ts is None or df.empty:
+        return df
+    start = end_ts - pd.Timedelta(days=days)
+    return df.loc[(df.index >= start) & (df.index <= end_ts)]
+
+
+# ----------------------
+# Metrics: mini chart blocks (Plotly in components.html)
+# ----------------------
+def mini_chart_block(
+    key: str,
+    title: str,
+    series: pd.Series | None,
+    value_fmt: str = "{:,.2f}",
+) -> None:
+    last_txt = "—"
+
+    if series is None or series.dropna().shape[0] < 2:
+        html = f"""
+        <div class="ms-card">
+          <div class="ms-title">{title}</div>
+          <div class="ms-value">{last_txt}</div>
+          <div class="ms-chart-placeholder"></div>
         </div>
+        """
+        components.html(_wrap_ms_card_html(html), height=280, scrolling=False)
+        return
+
+    s = series.dropna().sort_index()
+    last = s.iloc[-1]
+    try:
+        last_txt = value_fmt.format(last)
+    except Exception:
+        last_txt = str(last)
+
+    baseline = 0.0 if key == "etf_flow" else float(s.mean())
+    is_up = bool(s.iloc[-1] >= s.iloc[0])
+    line_color = "#2d6bff" if is_up else "#ffb020"
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=s.index,
+            y=s.values,
+            mode="lines",
+            line=dict(color=line_color, width=1.2, shape="linear"),
+            hovertemplate="%{x|%Y-%m-%d}<br><b>%{y:,.2f}</b><extra></extra>",
+        )
+    )
+    fig.add_hline(
+        y=baseline,
+        line_width=1,
+        line_dash="solid",
+        line_color="rgba(255,255,255,0.28)",
+    )
+
+    fig.update_xaxes(visible=False, rangeslider_visible=False, rangeselector=dict(visible=False))
+    fig.update_yaxes(visible=False)
+    fig.update_layout(
+        height=150,
+        margin=dict(l=4, r=4, t=2, b=2),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(10,12,18,0.18)",
+        hovermode="x",
+        showlegend=False,
+    )
+
+    # ✅ iframe 안에서도 그래프가 사라지지 않게 PlotlyJS 로드
+    plot_html = pio.to_html(
+        fig,
+        full_html=False,
+        include_plotlyjs="cdn",
+        config={"displayModeBar": False},
+    )
+
+    html = f"""
+    <div class="ms-card {'up' if is_up else 'down'}">
+      <div class="ms-title">{title}</div>
+      <div class="ms-value">{last_txt}</div>
+      <div class="ms-chart">{plot_html}</div>
+    </div>
+    """
+    components.html(_wrap_ms_card_html(html), height=280, scrolling=False)
+
+
+def _wrap_ms_card_html(inner: str) -> str:
+    # f-string으로 안전하게 (format/중괄호 충돌 방지)
+    return f"""
+    <div class="ms-root">
+      <style>
+        .ms-root {{
+          font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Apple SD Gothic Neo", "Noto Sans KR", Arial;
+        }}
+
+        .ms-card {{
+          border-radius: 18px;
+          padding: 18px 18px 16px 18px;
+          background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03));
+          border: 1px solid rgba(255,255,255,0.18);
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.06) inset,
+            0 22px 60px rgba(0,0,0,0.45);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+          overflow: hidden;
+        }}
+        .ms-card:hover {{
+          transform: translateY(-2px);
+          border-color: rgba(255,255,255,0.30);
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.10) inset,
+            0 28px 78px rgba(0,0,0,0.52);
+        }}
+
+        .ms-title {{
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1.1;
+          margin: 0 0 6px 0;
+          color: rgba(255,255,255,0.92);
+        }}
+
+        .ms-value {{
+          font-size: 20px;
+          font-weight: 900;
+          line-height: 1.05;
+          margin: 0 0 18px 0;
+          color: rgba(255,255,255,0.92);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }}
+
+        .ms-chart {{
+          margin-top: 4px;
+          border-radius: 14px;
+          overflow: hidden;
+          background: rgba(10,12,18,0.18);
+          min-height: 160px;
+        }}
+
+        .ms-chart .plot-container,
+        .ms-chart .js-plotly-plot {{
+          width: 100% !important;
+        }}
+
+        .ms-chart .js-plotly-plot,
+        .ms-chart .plot-container,
+        .ms-chart .svg-container {{
+          border-radius: 14px !important;
+          overflow: hidden !important;
+          background: transparent !important;
+        }}
+        .ms-chart svg {{
+          background: transparent !important;
+        }}
+
+        .ms-card.up {{
+          border-color: rgba(45,107,255,0.34);
+          box-shadow:
+            0 0 0 1px rgba(45,107,255,0.10) inset,
+            0 22px 60px rgba(0,0,0,0.45);
+        }}
+        .ms-card.down {{
+          border-color: rgba(255,176,32,0.34);
+          box-shadow:
+            0 0 0 1px rgba(255,176,32,0.10) inset,
+            0 22px 60px rgba(0,0,0,0.45);
+        }}
+
+        .ms-chart-placeholder {{
+          height: 150px;
+          background: rgba(10,12,18,0.18);
+          border-radius: 12px;
+          margin-top: 2px;
+        }}
+      </style>
+
+      {inner}
+    </div>
+    """
+
+
+# ----------------------
+# Futures Market Snapshot helpers
+# ----------------------
+def _fmt_ratio(x) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "—"
+    return f"{float(x):.2f}"
+
+
+def _fmt_pct(x) -> str:
+    """x is already percent units (e.g. 0.38 means 0.38%)."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "—"
+    v = float(x)
+    sign = "+" if v > 0 else ""
+    return f"{sign}{v:.2f}%"
+
+
+def _fmt_usd_full(x) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "—"
+    return f"${float(x):,.0f}"
+
+
+def _inject_fs_styles_once() -> None:
+    st.markdown(
+        """
+<style>
+:root{
+  --mood-cool:    rgba(80, 200, 180, 0.95);
+  --mood-neutral: rgba(255, 255, 255, 0.60);
+  --mood-warm:    rgba(255, 170, 80, 0.95);
+
+  --tag-bg-cool:    rgba(80, 200, 180, 0.14);
+  --tag-bg-neutral: rgba(255, 255, 255, 0.10);
+  --tag-bg-warm:    rgba(255, 170, 80, 0.14);
+
+  --tag-bd-cool:    rgba(80, 200, 180, 0.35);
+  --tag-bd-neutral: rgba(255, 255, 255, 0.25);
+  --tag-bd-warm:    rgba(255, 170, 80, 0.35);
+}
+
+/* Grid */
+.fs-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+@media (max-width: 640px){ .fs-grid{ gap: 10px; } }
+
+/* Boxes */
+.fs-box{
+  padding: 14px 14px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.045);
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(10px);
+  min-height: 96px;
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+  transform: translateZ(0);
+}
+.fs-box:hover{
+  background: rgba(255,255,255,0.065);
+  border-color: rgba(255,255,255,0.13);
+  transform: translateY(-2px);
+}
+
+.fs-k{
+  font-size:12px;
+  font-weight:750;
+  letter-spacing:-0.01em;
+  color: rgba(255,255,255,0.72);
+  line-height:1.2;
+}
+
+.fs-vrow{
+  margin-top: 8px;
+  display:flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fs-v{
+  font-size: 28px;
+  font-weight: 850;
+  letter-spacing: -0.02em;
+  color: rgba(255,255,255,0.92);
+  line-height: 1.0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tags */
+.tag{
+  display:inline-flex;
+  align-items:center;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  line-height: 1;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  opacity: 0.95;   /* 기본이 0.85~0.9라면 살짝 또렷 */
+}
+.tag.cool{ color: var(--mood-cool); background: var(--tag-bg-cool); border:1px solid var(--tag-bd-cool); }
+.tag.neutral{ color: var(--mood-neutral); background: var(--tag-bg-neutral); border:1px solid var(--tag-bd-neutral); }
+.tag.warm{ color: var(--mood-warm); background: var(--tag-bg-warm); border:1px solid var(--tag-bd-warm); }
+
+/* Futures 아래 바닥 확보 */
+.fs-bottom-space{ height: 30px; }
+</style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def chart_placeholder(title: str, note: str = "") -> None:
-    st.markdown(
-        f"""
-        <div class="mm-mini-card" style="padding:16px;">
-          <div style="font-weight:900; margin-bottom:10px;">{title}</div>
-          <div style="opacity:.55; line-height:1.4;">(차트 자리) {note}</div>
-          <div style="margin-top:14px; height:180px; border-radius:14px; border:1px dashed rgba(255,255,255,.18);"></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+# ---- tag rules ----
+def _tag_oi(oi_chg_pct_24h: float | None) -> tuple[str, str]:
+    if oi_chg_pct_24h is None or (isinstance(oi_chg_pct_24h, float) and np.isnan(oi_chg_pct_24h)):
+        return ("OI Flat", "neutral")
+    if oi_chg_pct_24h > 1.0:
+        return ("OI Expanding", "cool")
+    if oi_chg_pct_24h < -1.0:
+        return ("OI Deleveraging", "warm")
+    return ("OI Flat", "neutral")
+
+
+def _tag_taker(tr: float | None) -> tuple[str, str]:
+    if tr is None or (isinstance(tr, float) and np.isnan(tr)):
+        return ("Flow Balanced", "neutral")
+    if tr >= 1.05:
+        return ("Buy-side Aggressive", "cool")
+    if tr <= 0.95:
+        return ("Sell-side Aggressive", "warm")
+    return ("Flow Balanced", "neutral")
+
+
+def _tag_liq(total_usd: float | None, long_usd: float | None, short_usd: float | None) -> tuple[str, str]:
+    if total_usd is None or (isinstance(total_usd, float) and np.isnan(total_usd)):
+        return ("Liquidation Light", "neutral")
+
+    total = float(total_usd)
+    if total < 50e6:
+        return ("Liquidation Light", "neutral")
+
+    lv = 0.0 if long_usd is None or (isinstance(long_usd, float) and np.isnan(long_usd)) else float(long_usd)
+    sv = 0.0 if short_usd is None or (isinstance(short_usd, float) and np.isnan(short_usd)) else float(short_usd)
+
+    if lv > sv * 1.3:
+        return ("Longs Flushed", "warm")
+    if sv > lv * 1.3:
+        return ("Shorts Squeezed", "cool")
+    return ("Liquidation Light", "neutral")
+
+
+def _tag_premium(pct: float | None) -> tuple[str, str]:
+    if pct is None or (isinstance(pct, float) and np.isnan(pct)):
+        return ("Premium Neutral", "neutral")
+    v = float(pct)
+    if v >= 0.10:
+        return ("US Spot Bid", "cool")
+    if v <= -0.10:
+        return ("US Demand Fading", "warm")
+    return ("Premium Neutral", "neutral")
+
+
+def render_futures_market_snapshot(df: pd.DataFrame, row: pd.Series) -> None:
+    _inject_fs_styles_once()
+
+    COL_OI    = "oi_close"
+    COL_TAKER = "taker_buy_ratio"
+    COL_LIQ_T = "liq_total_usd"
+    COL_LIQ_L = "liq_long_usd"
+    COL_LIQ_S = "liq_short_usd"
+    COL_PREM  = "coinbase_premium_rate"
+
+    oi    = row.get(COL_OI)
+    taker = row.get(COL_TAKER)
+    liq_t = row.get(COL_LIQ_T)
+    liq_l = row.get(COL_LIQ_L)
+    liq_s = row.get(COL_LIQ_S)
+    prem  = row.get(COL_PREM)
+
+    # OI 전일 대비(%)
+    oi_chg_pct_24h = None
+    try:
+        if row.name in df.index:
+            pos = df.index.get_loc(row.name)
+            if isinstance(pos, int) and pos > 0:
+                prev = df.iloc[pos - 1].get(COL_OI)
+                if prev is not None and float(prev) != 0:
+                    oi_chg_pct_24h = (float(oi) / float(prev) - 1) * 100
+    except Exception:
+        pass
+
+    oi_tag, oi_tone = _tag_oi(oi_chg_pct_24h)
+    tr_tag, tr_tone = _tag_taker(taker)
+    lq_tag, lq_tone = _tag_liq(liq_t, liq_l, liq_s)
+    cp_tag, cp_tone = _tag_premium(prem)
+
+    with st.container(border=True):
+        # ✅ 마커 통일 (컨테이너 wrapper 잡는 용도)
+        st.markdown("<div data-ms='futures'></div>", unsafe_allow_html=True)
+
+        section_title(
+            "Futures Market Snapshot",
+            "파생·현물 수급 지표를 통해 현재 시장의 포지션 구조와 레버리지 상태를 요약합니다.",
+        )
+        spacer(36)
+
+        st.markdown(
+            f"""
+<div class="fs-grid">
+  <div class="fs-box">
+    <div class="fs-k">OPEN INTEREST</div>
+    <div class="fs-vrow">
+      <div class="fs-v">{_fmt_usd_full(oi)}</div>
+      <span class="tag {oi_tone}">{oi_tag}</span>
+    </div>
+  </div>
+
+  <div class="fs-box">
+    <div class="fs-k">TAKER RATIO</div>
+    <div class="fs-vrow">
+      <div class="fs-v">{_fmt_ratio(taker)}</div>
+      <span class="tag {tr_tone}">{tr_tag}</span>
+    </div>
+  </div>
+
+  <div class="fs-box">
+    <div class="fs-k">LIQUIDATION (24H)</div>
+    <div class="fs-vrow">
+      <div class="fs-v">{_fmt_usd_full(liq_t)}</div>
+      <span class="tag {lq_tone}">{lq_tag}</span>
+    </div>
+  </div>
+
+  <div class="fs-box">
+    <div class="fs-k">COINBASE PREMIUM</div>
+    <div class="fs-vrow">
+      <div class="fs-v">{_fmt_pct(prem)}</div>
+      <span class="tag {cp_tone}">{cp_tag}</span>
+    </div>
+  </div>
+</div>
+<div class="fs-bottom-space"></div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ======================
 # Page
 # ======================
-st.set_page_config(page_title="Market Signals", layout="wide")
 inject_styles()
 
-df = load_df(DATA_PATH)  # ✅ DatetimeIndex(UTC)
+# ✅ 페이지 스코프 마커
+st.markdown("<span class='ms-page'></span>", unsafe_allow_html=True)
 
-# ✅ Market Mood와 동일 헤더 (title + 날짜 선택)
+# ✅ Market Mood 방식: wrapper margin/padding으로 간격 제어 (확실히 먹음)
+st.markdown(
+    """
+<style>
+/* 1) 섹션(컨테이너) 프레임 간 간격: Metrics 아래를 줄이고, Futures를 위로 당김 */
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="metrics"]){
+  margin-bottom: 8px !important;      /* <- 필요하면 0~12 사이로 */
+}
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="futures"]){
+  margin-top: -10px !important;       /* <- -6 ~ -18 사이로 취향 */
+}
+
+/* 2) Futures 섹션의 '바닥'은 wrapper 내부 padding으로 확보 (간격 줄여도 바닥 유지) */
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="futures"]) > div{
+  padding-bottom: 2px !important;    /* <- 16~28 */
+}
+
+/* 3) 혹시 전체 vertical gap을 건드리고 싶으면 "살짝만" (과하면 바닥 사라짐)
+:has(.ms-page) [data-testid="stVerticalBlock"]{ gap: 4px !important; }
+*/
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+df = load_df(DATA_PATH)
+
 anchor_ts, row = render_header(
     df=df,
     title="Market Signals",
-    subtitle="시장 분위기를 구성하는 개별 지표를 상세하게 확인합니다.",
+    subtitle="주요 시장 지표를 구조적으로 확인합니다.",
     date_key="ms_date",
 )
+
+# (헤더 아래 여백)
 spacer(16)
 
-row_dict = row.to_dict() if hasattr(row, "to_dict") else {}
+COL_ETF_FLOW = "etf_flow_usd"
+COL_ETF_AUM  = "etf_aum_usd"
+COL_FFR      = "ffr"
+COL_SP500    = "sp500"
 
-
-# ======================
-# Section 1: Signals Overview
-# ======================
+# ----------------------
+# Metrics section
+# ----------------------
 with st.container(border=True):
-    st.markdown("<div data-ms='overview'></div>", unsafe_allow_html=True)
-    section_title("Signals Overview", "핵심 지표를 상태(🟢🟡🔴)로 빠르게 스캔합니다.")
+    # ✅ 마커 통일
+    st.markdown("<div data-ms='metrics'></div>", unsafe_allow_html=True)
 
-    tiles: List[Dict[str, str]] = [
-        {"name": "Open Interest", "status": "🔴", "one": "단기 급증 구간", "meta": "Percentile • 60d"},
-        {"name": "Funding Rate", "status": "🔴", "one": "상단 구간(과열)", "meta": "Percentile • 60d"},
-        {"name": "Liquidations", "status": "🟡", "one": "증가 추세(주의)", "meta": "Rolling sum"},
-        {"name": "Taker Flow", "status": "🟡", "one": "공격적 매수·매도 쏠림 관측", "meta": "Imbalance"},
-        {"name": "M2", "status": "🟢", "one": "완만한 유동성 흐름", "meta": "Macro"},
-    ]
+    section_title("Metrics", "자금 흐름과 매크로 환경의 변화를 미니 차트로 보여줍니다.")
+    spacer(2)
 
-    c1, c2, c3, c4, c5 = st.columns(5, gap="small")
-    for col, t in zip([c1, c2, c3, c4, c5], tiles):
-        with col:
-            render_signal_tile(t["name"], t["status"], t["one"], t.get("meta", ""))
+    st.markdown('<div class="ms-cards-row">', unsafe_allow_html=True)
 
-spacer(32)
+    w = _window_df(df, anchor_ts, days=120)
 
-
-# ======================
-# Section 2: Derivatives Signals
-# ======================
-with st.container(border=True):
-    st.markdown("<div data-ms='derivatives'></div>", unsafe_allow_html=True)
-    section_title("Derivatives Signals", "파생 지표를 차트로 확인합니다.")
-
-    left, right = st.columns([2, 1], gap="large")
-
-    with left:
-        chart_placeholder("Funding Rate (60d)", "percentile band / 최근 급등 구간 강조")
-        spacer(12)
-        chart_placeholder("Open Interest (60d)", "급증/감소 구간 강조")
-        spacer(12)
-        chart_placeholder("Liquidations (30d)", "청산 스파이크 표시")
-
-    with right:
-        section_title("Quick Notes", "차트 옆 한 줄 해석(자동 생성 영역)")
-        render_signal_tile("Funding", "🔴", "펀딩 과열 구간 — 레버리지 쏠림 점검", "Rule-based note")
-        spacer(10)
-        render_signal_tile("OI", "🔴", "포지션 과밀 — 변동성 확대 가능", "Rule-based note")
-        spacer(10)
-        render_signal_tile("Liq", "🟡", "청산 증가 — 급변 구간 발생 가능", "Rule-based note")
-
-spacer(32)
-
-
-# ======================
-# Section 3: Liquidity / Macro
-# ======================
-with st.container(border=True):
-    st.markdown("<div data-ms='macro'></div>", unsafe_allow_html=True)
-    section_title("Liquidity / Macro", "구조적 환경(유동성)을 확인합니다.")
-
-    l, r = st.columns([2, 1], gap="large")
-    with l:
-        chart_placeholder("M2 (macro)", "느린 지표 — 장기 흐름 위주")
-    with r:
-        render_signal_tile("M2", "🟢", "완만한 흐름 — 급격한 악화 신호는 제한적", "Macro note")
-
-spacer(32)
-
-
-# ======================
-# Section 4: Sentiment & Attention
-# ======================
-with st.container(border=True):
-    st.markdown("<div data-ms='sentiment'></div>", unsafe_allow_html=True)
-    section_title("Sentiment & Attention", "시장 심리와 관심도(보너스 요인)를 확인합니다.")
-
-    c1, c2 = st.columns(2, gap="large")
+    c1, c2, c3, c4 = st.columns(4, gap="small")
     with c1:
-        chart_placeholder("Market Sentiment (z-score)", "60d z-score 기반")
+        mini_chart_block("etf_flow", "ETF Flow", w.get(COL_ETF_FLOW), "{:,.0f}")
     with c2:
-        chart_placeholder("Google Trends (z-score)", "BTC 관심도")
+        mini_chart_block("etf_aum", "ETF AUM 변화량", w.get(COL_ETF_AUM), "{:,.0f}")
+    with c3:
+        mini_chart_block("ffr", "FFR 기준금리", w.get(COL_FFR), "{:.2f}%")
+    with c4:
+        mini_chart_block("sp500", "S&P 500 (Tech)", w.get(COL_SP500), "{:,.2f}")
 
-spacer(32)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ----------------------
+# Futures section
+# ----------------------
+render_futures_market_snapshot(df, row)
