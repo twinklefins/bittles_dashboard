@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Tuple
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 def _inject_header_css() -> None:
@@ -35,7 +36,7 @@ def _inject_header_css() -> None:
 .mm-date-label{
   font-size: 12px;
   color: rgba(255,255,255,.65);
-  margin: 0 0 px 0;
+  margin: 0 0 0 0;
 }
 
 /* ✅ 핵심 1) 헤더 앵커 다음에 나오는 "columns 블록" 자체를 flex-start로 */

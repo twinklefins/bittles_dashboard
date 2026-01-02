@@ -1,6 +1,7 @@
 # components/styles.py
 import streamlit as st
 
+
 def inject_styles() -> None:
     bg0 = "#070B14"
     bg1 = "#0B1220"
@@ -45,8 +46,24 @@ header[data-testid="stHeader"] {{
 }}
 
 /* ======================================================
-   ✅ st.container(border=True) ONLY
-   - 일반 컨테이너 전체를 건드리면 다른 페이지도 깨짐
+   BLOCK HEAD (공통)
+====================================================== */
+.mm-block-title {{
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: rgba(255,255,255,.92);
+}}
+.mm-block-sub {{
+  margin-top: 6px !important;
+  margin-bottom: 12px !important;
+  font-size: 12px;
+  color: rgba(255,255,255,.55);
+  line-height: 1.45;
+}}
+
+/* ======================================================
+   st.container(border=True) 기본 카드 스타일
 ====================================================== */
 div[data-testid="stVerticalBlockBorderWrapper"] {{
   background: rgba(255,255,255,.06) !important;
@@ -59,51 +76,72 @@ div[data-testid="stVerticalBlockBorderWrapper"] {{
 }}
 
 div[data-testid="stVerticalBlockBorderWrapper"] > div {{
-  padding: 14px 16px 16px 16px !important; /* 위아래 여유 줄임 */
+  padding: 18px 16px 18px 16px !important;
 }}
 
-/* divider(가로줄) 제거 */
-div[data-testid="stDivider"]{{ display:none !important; }}
+div[data-testid="stDivider"] {{ display:none !important; }}
 
 /* ======================================================
-   SELECTBOX / BASEWEB (날짜 선택 UI)
+   SELECTBOX / BASEWEB (날짜 선택 UI) - spacing fix (strong)
 ====================================================== */
-div[data-baseweb="select"] > div {{
-  background: rgba(255,255,255,0.06) !important;
-  border: 1px solid rgba(255,255,255,0.18) !important;
-  border-radius: 12px !important;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset !important;
+
+/* 1) st.selectbox 라벨 자체 / 라벨 안 p(텍스트) 모두 커버 */
+div[data-testid="stSelectbox"] label {{
+  margin-bottom: 10px !important;          /* 라벨-박스 간격 */
 }}
 
-div[data-baseweb="select"] span,
-div[data-baseweb="select"] input {{
-  color: rgba(255,255,255,0.92) !important;
-  -webkit-text-fill-color: rgba(255,255,255,0.92) !important;
-  caret-color: rgba(255,255,255,0.92) !important;
-  font-weight: 800 !important;
+div[data-testid="stSelectbox"] label p {{
+  margin: 0 0 10px 0 !important;           /* Streamlit이 p에 margin 주는 케이스 */
+  padding: 0 !important;
+  line-height: 1.2 !important;
 }}
 
-div[data-baseweb="select"] svg {{
-  fill: rgba(255,255,255,0.75) !important;
+/* 2) select 박스(베이스웹) 위쪽 여백도 추가 */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] {{
+  margin-top: 8px !important;              /* 필요시 0~6 */
 }}
 
-div[data-baseweb="popover"] div[role="listbox"] {{
-  background: rgba(14,16,22,0.98) !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  border-radius: 12px !important;
-  overflow: hidden !important;
-  box-shadow: 0 18px 50px rgba(0,0,0,0.45) !important;
+/* 3) 혹시 label이 stWidgetLabel로 따로 렌더되는 버전도 같이 커버 */
+div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
+  margin-bottom: 10px !important;
 }}
 
-div[role="option"] {{
-  color: rgba(255,255,255,0.86) !important;
+
+/* ======================================================
+   Market Signals (scoped)
+   ✅ 안정판: data-ms 마커로만 컨트롤
+   - 03_Market_Signals.py에서 아래 2개만 넣으면 됨
+     Metrics 컨테이너 안:  st.markdown("<div data-ms='metrics'></div>", unsafe_allow_html=True)
+     Futures 컨테이너 안:  st.markdown("<div data-ms='futures'></div>", unsafe_allow_html=True)
+   - 그리고 페이지 상단에 ms-page 마커는 유지:
+     st.markdown("<span class='ms-page'></span>", unsafe_allow_html=True)
+====================================================== */
+
+/* (1) Market Signals 페이지 전체: 섹션(컨테이너)들 사이 기본 간격 */
+:has(.ms-page) [data-testid="stVerticalBlock"] {{
+  gap: 12px !important;            /* ✅ 10~16 취향 */
 }}
-div[role="option"][aria-selected="true"] {{
-  background: rgba(255,255,255,0.10) !important;
+
+/* (2) Metrics ↔ Futures 간격만 더 타이트하게 */
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="metrics"]) {{
+  margin-bottom: 6px !important;   /* ✅ 0~12 */
 }}
-div[role="option"]:hover {{
-  background: rgba(255,255,255,0.08) !important;
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="futures"]) {{
+  margin-top: -10px !important;    /* ✅ -6 ~ -18 */
 }}
+
+/* (3) Futures 아래 바닥(패딩) 확보 */
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="futures"]) > div {{
+  padding-bottom: 24px !important; /* ✅ 18~32 */
+}}
+
+/* (4) Market Signals에서 제목/서브 텍스트 간격 조금 정리(선택) */
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="metrics"]) .mm-block-sub,
+:has(.ms-page) div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-ms="futures"]) .mm-block-sub {{
+  margin-top: 4px !important;
+  margin-bottom: 8px !important;
+}}
+
 </style>
         """,
         unsafe_allow_html=True,

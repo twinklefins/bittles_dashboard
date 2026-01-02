@@ -147,22 +147,6 @@ def inject_mm_css() -> None:
         """
 <style>
 /* =========================
-   BLOCK HEAD
-========================= */
-.mm-block-title{
-  font-size: 16px;
-  font-weight: 900;
-  letter-spacing: -0.01em;
-  color: rgba(255,255,255,.92);
-}
-.mm-block-sub{
-  margin-top: 8px;
-  font-size: 12px;
-  color: rgba(255,255,255,.55);
-  line-height: 1.45;
-}
-
-/* =========================
    컨테이너 위치 조절 (안정판)
 ========================= */
 div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-mm="score"]){
@@ -582,7 +566,7 @@ df.index = df.index.tz_convert(KST)
 anchor_ts, row = render_header(
     df,
     title="Market Mood",
-    subtitle="Market Mood(일간 현황) 페이지는 시장 상태 요약과 BTC 주요 지표를 함께 보여줍니다.",
+    subtitle="시장 상태 요약과 BTC 주요 지표를 함께 보여줍니다.",
     date_key="mm_date",
 )
 
@@ -612,7 +596,7 @@ with st.container(border=True):
       <div class="mm-block-head">
         <div class="mm-block-title">Market Mood Score</div>
         <div class="mm-block-sub">
-          현재 시장의 리스크와 심리 상태를 종합해 0–100 점수로 요약합니다.
+          현재 시장의 리스크와 심리 상태를 종합해 0–100 점수로 나타냅니다.
         </div>
       </div>
     """)
@@ -697,7 +681,7 @@ with st.container(border=True):
       <div class="mm-block-head">
         <div class="mm-block-title">BTC Daily Snapshot</div>
         <div class="mm-block-sub">
-          전일 종가 기준으로 본 비트코인 주요 지표 요약입니다.
+          전일 종가 기준으로 본 비트코인 주요 지표를 정리합니다.
         </div>
       </div>
     """)
