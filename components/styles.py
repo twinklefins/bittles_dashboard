@@ -142,6 +142,62 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   margin-bottom: 8px !important;
 }}
 
+/* =========================
+   Mobile responsive (global)
+========================= */
+@media (max-width: 820px){{
+
+  /* Streamlit columns 겹침 방지 */
+  div[data-testid="stHorizontalBlock"]{{
+    flex-wrap: wrap !important;
+  }}
+  div[data-testid="column"]{{
+    width: 100% !important;
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+  }}
+
+  /* 페이지 좌우 여백 */
+  section.main > div{{
+    padding-left: 0.9rem !important;
+    padding-right: 0.9rem !important;
+  }}
+
+  /* =========================
+     ✅ 2열 유지하고 싶은 그리드들
+     - 화면 충분하면 2열
+     - 부족하면 자동 1열
+  ========================= */
+  .mm-grid-2x2,
+  .ms-futures-grid{{
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+  }}
+
+  /* 아주 작은 화면(아이폰 SE급)은 1열로 폴백 */
+  @media (max-width: 520px){{
+    .mm-grid-2x2,
+    .ms-futures-grid{{
+      grid-template-columns: 1fr !important;
+    }}
+  }}
+
+  /* =========================
+     Risk Alert: 7D Direction는 모바일 1열이 안정적
+  ========================= */
+  .ra-7d-grid{{
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }}
+
+  /* Up20 / Down20도 모바일에선 세로 */
+  .ra-split2{{
+    grid-template-columns: 1fr !important;
+  }}
+}}
+
+
 </style>
         """,
         unsafe_allow_html=True,
