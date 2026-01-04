@@ -384,8 +384,19 @@ def _inject_fs_styles_once() -> None:
 }
 
 /* Grid */
-.fs-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
-@media (max-width: 640px){ .fs-grid{ gap: 10px; } }
+.fs-grid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 12px;
+}
+
+/* 모바일에서는 1열 */
+@media (max-width: 640px){
+  .fs-grid{
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
 
 /* Boxes */
 .fs-box{
