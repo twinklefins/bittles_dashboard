@@ -197,17 +197,6 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   }}
 }}
 
-/* ✅ 모바일에서 KPI 카드 그리드가 오른쪽으로 밀리는 현상 방지 */
-@media (max-width: 640px){{
-  .mm-grid, .btc-grid, .kpi-grid, .ra-kpi-grid, .fs-grid{{
-    width: 100% !important;
-    max-width: 100% !important;
-    justify-content: center !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-  }}
-}}
-
 /* ✅ 모바일에서 큰 숫자 KPI가 잘리는 문제 해결 */
 @media (max-width: 640px){{
   .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
@@ -225,6 +214,13 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
     text-overflow: ellipsis !important;
     overflow: hidden !important;
+  }}
+}}
+
+/* ✅ Market Signals - Metrics: 모바일 1열 */
+@media (max-width: 640px){{
+  .fs-grid{{
+    grid-template-columns: 1fr !important;
   }}
 }}
 
