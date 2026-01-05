@@ -224,6 +224,66 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   }}
 }}
 
+/* BTC Snapshot 모바일 밀림 방지 */
+.btc-snapshot {{ width:100%; max-width:100%; overflow-x:hidden; }}
+.btc-snapshot .mm-btc-row{{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; }}
+@media (max-width: 640px){{
+  .btc-snapshot .mm-btc-row{{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
+}}
+
+/* =========================
+   ✅ Risk Alert 7D - iPad 뱃지 잘림/튀어나옴 강제 해결
+========================= */
+
+/* grid 셀에서 내용 때문에 옆 칼럼을 밀지 못하게 */
+.ra-7d-grid,
+.ra-7d-card,
+.ra-7d-card-inner,
+.ra-split2,
+.ra-split-box{{
+  min-width: 0 !important;
+}}
+
+/* =========================
+   ✅ Risk Alert 7D - Up20/Down20 뱃지 잘림 해결 (항상 wrap 허용)
+========================= */
+
+/* grid/box 안에서 내용 때문에 옆 칸을 밀지 못하게 */
+.ra-7d-wrap, .ra-7d-grid, .ra-7d-card, .ra-7d-card-inner,
+.ra-split2, .ra-split-box {{
+  min-width: 0 !important;
+}}
+
+/* 헤더 줄: 공간 부족하면 다음 줄로 내려가게 */
+.ra-split-top{{
+  display: flex !important;
+  flex-wrap: wrap !important;     /* ✅ 핵심 */
+  align-items: center !important;
+  gap: 8px !important;
+}}
+
+/* Up20/Down20 라벨은 줄바꿈 금지 */
+.ra-split-kicker{{
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+}}
+
+/* 뱃지(클래스가 뭐든) - 줄바꿈 허용 + 잘리면 ... */
+.ra-split-top > *:last-child{{
+  flex: 0 1 auto !important;      /* ✅ shrink 허용 */
+  min-width: 0 !important;
+  max-width: 100% !important;
+
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}}
+
+/* 카드에서 overflow hidden이 걸려있으면 강제로 풀기 (더 강한 specificity) */
+.ra-7d-wrap .ra-split2 .ra-split-box{{
+  overflow: visible !important;
+}}
+
 </style>
         """,
         unsafe_allow_html=True,

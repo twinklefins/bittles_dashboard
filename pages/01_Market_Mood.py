@@ -665,6 +665,7 @@ with st.container(border=True):
 
     st.markdown("<div style='height:32px'></div>", unsafe_allow_html=True)
 
+
 # ======================
 # ✅ BTC Daily Snapshot
 # ======================
@@ -674,9 +675,10 @@ v2 = fmt_signed(btc["chg"])
 v3 = fmt_signed_pct(btc["chg_pct"])
 v4 = "N/A" if btc["vol7d"] is None else f"{btc['vol7d']:.2f}%"
 
-st.markdown('<div class="btc-snapshot">', unsafe_allow_html=True)
-
 with st.container(border=True):
+    # ✅ wrapper를 "컨테이너 안쪽"에 둔다
+    st.markdown('<div class="btc-snapshot">', unsafe_allow_html=True)
+
     md_html('<div data-mm="btc"></div>')
 
     md_html("""
@@ -719,4 +721,6 @@ with st.container(border=True):
     """)
 
     st.markdown("<div style='height:32px'></div>", unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
+
+    # ✅ wrapper 닫기
+    st.markdown("</div>", unsafe_allow_html=True)

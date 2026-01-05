@@ -390,14 +390,6 @@ def _inject_fs_styles_once() -> None:
   gap: 12px;
 }
 
-/* 모바일에서는 1열 */
-@media (max-width: 640px){
-  .fs-grid{
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-}
-
 /* Boxes */
 .fs-box{
   padding: 14px 14px;

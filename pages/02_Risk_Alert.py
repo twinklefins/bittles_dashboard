@@ -544,6 +544,17 @@ div[data-testid="stExpander"]{
              
 .ra-split-bar{ padding-top: 14px; }
 
+/* 카드 자체는 잘리지 않게 */
+.ms-card{
+  overflow: visible;
+}
+
+/* 차트만 라운드 + 잘림 */
+.ms-chart-clip{
+  border-radius: 18px;
+  overflow: hidden;
+}
+
 </style>
 """)
 
@@ -897,8 +908,13 @@ else:
             ),
         )
 
+        st.markdown('<div class="ms-chart-clip">', unsafe_allow_html=True)
+
         st.plotly_chart(
             fig,
             use_container_width=True,
             config={"displayModeBar": False, "responsive": True}
         )
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
