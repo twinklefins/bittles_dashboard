@@ -544,17 +544,6 @@ div[data-testid="stExpander"]{
              
 .ra-split-bar{ padding-top: 14px; }
 
-/* 카드 자체는 잘리지 않게 */
-.ms-card{
-  overflow: visible;
-}
-
-/* 차트만 라운드 + 잘림 */
-.ms-chart-clip{
-  border-radius: 18px;
-  overflow: hidden;
-}
-
 </style>
 """)
 
@@ -803,7 +792,7 @@ else:
     _st_html(f"""
     <div class="ra-7d-wrap" style="border:{t_final['border']}; box-shadow:{t_final['glow']};">
       <div class="ra-7d-title">7D Direction</div>
-      <div class="ra-7d-sub">향후 7일 수익률 ‘가능 범위(q10/q50/q90)’와 비대칭 리스크 신호(Down20)를 보여줍니다. .</div>
+      <div class="ra-7d-sub">향후 7일 수익률 ‘가능 범위(q10/q50/q90)’와 비대칭 리스크 신호(Down20)를 보여줍니다.</div>
 
       <div class="ra-7d-grid">
         {card1}
@@ -908,13 +897,8 @@ else:
             ),
         )
 
-        st.markdown('<div class="ms-chart-clip">', unsafe_allow_html=True)
-
         st.plotly_chart(
             fig,
             use_container_width=True,
             config={"displayModeBar": False, "responsive": True}
         )
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
