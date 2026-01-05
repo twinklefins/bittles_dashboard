@@ -224,13 +224,6 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   }}
 }}
 
-/* BTC Snapshot 모바일 밀림 방지 */
-.btc-snapshot {{ width:100%; max-width:100%; overflow-x:hidden; }}
-.btc-snapshot .mm-btc-row{{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; }}
-@media (max-width: 640px){{
-  .btc-snapshot .mm-btc-row{{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
-}}
-
 /* =========================
    ✅ Risk Alert 7D - iPad 뱃지 잘림/튀어나옴 강제 해결
 ========================= */
@@ -242,6 +235,25 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
 .ra-split2,
 .ra-split-box{{
   min-width: 0 !important;
+}}
+
+/* =========================
+   BTC Daily Snapshot (mm-btc-row)
+========================= */
+
+/* 기본: PC는 4열 */
+.btc-snapshot .mm-btc-row{{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}}
+
+/* 모바일: 2열(2x2) */
+@media (max-width: 640px){{
+  .btc-snapshot .mm-btc-row{{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }}
 }}
 
 /* =========================
