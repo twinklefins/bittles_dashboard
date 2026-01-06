@@ -261,6 +261,40 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   .ra-kpi-tile.big .ra-kpi-val{{ font-size: 24px !important; }}
 }}
 
+/* =========================
+   ✅ 7D Direction - Tablet(iPad) Layout Fix
+   - 3열 → 2열
+   - 3번째 카드(변동성)는 아래에서 2칸 span
+========================= */
+@media (min-width: 769px) and (max-width: 1100px){{
+
+  /* wrapper 여백 살짝 조정 (선택) */
+  .ra-7d-wrap{{
+    padding: 22px 16px 34px 16px !important;
+  }}
+
+  /* ✅ 3열 → 2열 */
+  .ra-7d-grid{{
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+  }}
+
+  /* ✅ 3번째 카드(시장 예측 변동성)만 아래에서 2칸 먹기 */
+  .ra-7d-grid > .ra-7d-card:nth-child(3){{
+    grid-column: 1 / -1 !important;
+  }}
+
+  /* 혹시 삐져나오는 요소 있으면 안전하게 컷 */
+  .ra-7d-card{{
+    overflow: hidden !important;
+  }}
+
+  /* 카드2 Up/Down은 2칸 유지(현재가 보기 좋음) */
+  .ra-split2{{
+    grid-template-columns: 1fr 1fr !important;
+  }}
+}}
+
 </style>
         """,
         unsafe_allow_html=True,
