@@ -183,87 +183,35 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
     }}
   }}
 
-  /* =========================
-     Risk Alert: 7D Direction는 모바일 1열이 안정적
-  ========================= */
-  .ra-7d-grid{{
-    grid-template-columns: 1fr !important;
-    gap: 12px !important;
-  }}
-
-  /* Up20 / Down20도 모바일에선 세로 */
-  .ra-split2{{
-    grid-template-columns: 1fr !important;
-  }}
-}}
-
-/* ✅ 모바일에서 큰 숫자 KPI가 잘리는 문제 해결 */
-@media (max-width: 640px){{
-  .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
-    font-size: clamp(18px, 5.6vw, 28px) !important;
-    letter-spacing: -0.02em !important;
-    white-space: nowrap !important;
-  }}
-
-  /* 카드 안에서 넘칠 경우 대비 */
-  .fs-card, .mm-card, .kpi-tile, .fs-tile{{
-    overflow: hidden !important;
-  }}
-
-  /* $5... 처럼 생략 표시 자연스럽게 */
-  .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
-    text-overflow: ellipsis !important;
-    overflow: hidden !important;
-  }}
-}}
-
-/* ✅ Market Signals - Metrics: 모바일 1열 */
-@media (max-width: 640px){{
-  .fs-grid{{
-    grid-template-columns: 1fr !important;
-  }}
-}}
-
 /* =========================
-   ✅ Risk Alert 7D - iPad에서 뱃지 2번째 줄로 내리기
+   ✅ Risk Alert 7D - iPad에서 뱃지 무조건 2번째 줄
 ========================= */
 
-/* grid/box 안에서 내용 때문에 옆 칸을 밀지 못하게 */
-.ra-7d-wrap, .ra-7d-grid, .ra-7d-card, .ra-7d-card-inner,
-.ra-split2, .ra-split-box{{
-  min-width: 0 !important;
-}}
-
-/* 기본(PC/모바일 포함): 한 줄 유지 */
 .ra-split-top{{
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  align-items: center !important;
-  gap: 8px !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:8px !important;
+  flex-wrap:nowrap !important;   /* 기본은 한 줄 */
 }}
 
-/* Up20/Down20 라벨은 줄바꿈 금지 */
-.ra-split-kicker{{
-  flex: 0 0 auto !important;
-  white-space: nowrap !important;
-}}
-
-/* ✅ 아이패드/중간 폭에서만: "뱃지만" 다음 줄로 강제 */
+/* iPad/중간 폭에서만: wrap 허용 + 뱃지를 100%로 내려버리기 */
 @media (min-width: 768px) and (max-width: 1100px){{
   .ra-split-top{{
-    flex-wrap: wrap !important;     /* 줄바꿈 허용 */
+    flex-wrap:wrap !important;
   }}
 
-  /* _flag_badge()가 만들어내는 뱃지 요소를 통째로 한 줄 먹게 */
-  .ra-split-top > *:last-child{{
-    flex: 0 0 100% !important;      /* ✅ 핵심: 마지막요소(뱃지)를 100%로 */
+  /* ✅ 여기서부터가 핵심: "뱃지" 클래스들을 직접 타겟 */
+  .ra-split-top .ra-flag-badge,
+  .ra-split-top .ra-badge,
+  .ra-split-top .ra-pill,
+  .ra-split-top .ra-flag{{
+    flex: 0 0 100% !important;     /* 다음 줄로 강제 */
     max-width: 100% !important;
-  }}
-}}
+    align-self: flex-start !important;
 
-/* 카드에서 overflow hidden이 걸려있으면 강제로 풀기 */
-.ra-7d-wrap .ra-split2 .ra-split-box{{
-  overflow: visible !important;
+    /* 혹시 뱃지가 absolute면 내려가도 겹침 → 강제로 static */
+    position: static !important;
+  }}
 }}
 
 </style>

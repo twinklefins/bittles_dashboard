@@ -251,6 +251,12 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-mm="btc"]){
   margin-top: 14px;
 }
 
+@media (min-width: 768px) and (max-width: 1100px){
+  .ra-split-top .ra-split-kicker{
+    flex: 0 0 100% !important;
+  }
+}
+
 /* ✅ 모바일: 2열(2x2) */
 @media (max-width: 640px){
   .mm-btc-row{
