@@ -225,13 +225,12 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
 }}
 
 /* =========================
-   ✅ 7D Direction - Tablet(iPad) Layout Fix
-   - 3열 → 2열
-   - 3번째 카드(변동성)는 아래에서 2칸 span
+   ✅ 7D Direction - iPad/Tablet Layout Fix
+   - iPad 폭(가로)까지 커버: 820~1366
+   - hover:none 조건으로 "데스크탑 창 줄이기"엔 웬만하면 안 먹게
 ========================= */
-@media (min-width: 769px) and (max-width: 1100px){{
+@media (min-width: 820px) and (max-width: 1366px) and (hover: none) {{
 
-  /* wrapper 여백 살짝 조정 (선택) */
   .ra-7d-wrap{{
     padding: 22px 16px 34px 16px !important;
   }}
@@ -242,19 +241,12 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
     gap: 14px !important;
   }}
 
-  /* ✅ 3번째 카드(시장 예측 변동성)만 아래에서 2칸 먹기 */
+  /* ✅ 3번째 카드(시장 예측 변동성)만 아래에서 한 줄 전체 */
   .ra-7d-grid > .ra-7d-card:nth-child(3){{
-    grid-column: 1 / -1 !important;
   }}
 
-  /* 혹시 삐져나오는 요소 있으면 안전하게 컷 */
   .ra-7d-card{{
     overflow: hidden !important;
-  }}
-
-  /* 카드2 Up/Down은 2칸 유지(현재가 보기 좋음) */
-  .ra-split2{{
-    grid-template-columns: 1fr 1fr !important;
   }}
 }}
 
