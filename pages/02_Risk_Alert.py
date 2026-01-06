@@ -792,7 +792,7 @@ else:
     _st_html(f"""
     <div class="ra-7d-wrap" style="border:{t_final['border']}; box-shadow:{t_final['glow']};">
       <div class="ra-7d-title">7D Direction</div>
-      <div class="ra-7d-sub">향후 7일 수익률 ‘가능 범위(q10/q50/q90)’와 비대칭 리스크 신호(Down20)를 보여줍니다.</div>
+      <div class="ra-7d-sub">향후 7일 수익률 ‘가능 범위(q10/q50/q90)’와 비대칭 리스크 신호(Down20)를 보여줍니다. </div>
 
       <div class="ra-7d-grid">
         {card1}

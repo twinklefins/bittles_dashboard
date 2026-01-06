@@ -183,35 +183,82 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
     }}
   }}
 
-/* =========================
-   ✅ Risk Alert 7D - iPad에서 뱃지 무조건 2번째 줄
-========================= */
+  /* =========================
+     Risk Alert: 7D Direction는 모바일 1열이 안정적
+  ========================= */
+  .ra-7d-grid{{
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }}
 
-.ra-split-top{{
-  display:flex !important;
-  align-items:center !important;
-  gap:8px !important;
-  flex-wrap:nowrap !important;   /* 기본은 한 줄 */
+  /* Up20 / Down20도 모바일에선 세로 */
+  .ra-split2{{
+    grid-template-columns: 1fr !important;
+  }}
 }}
 
-/* iPad/중간 폭에서만: wrap 허용 + 뱃지를 100%로 내려버리기 */
-@media (min-width: 768px) and (max-width: 1100px){{
-  .ra-split-top{{
-    flex-wrap:wrap !important;
+/* ✅ 모바일에서 큰 숫자 KPI가 잘리는 문제 해결 */
+@media (max-width: 640px){{
+  .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
+    font-size: clamp(18px, 5.6vw, 28px) !important;
+    letter-spacing: -0.02em !important;
+    white-space: nowrap !important;
   }}
 
-  /* ✅ 여기서부터가 핵심: "뱃지" 클래스들을 직접 타겟 */
-  .ra-split-top .ra-flag-badge,
-  .ra-split-top .ra-badge,
-  .ra-split-top .ra-pill,
-  .ra-split-top .ra-flag{{
-    flex: 0 0 100% !important;     /* 다음 줄로 강제 */
-    max-width: 100% !important;
-    align-self: flex-start !important;
-
-    /* 혹시 뱃지가 absolute면 내려가도 겹침 → 강제로 static */
-    position: static !important;
+  /* 카드 안에서 넘칠 경우 대비 */
+  .fs-card, .mm-card, .kpi-tile, .fs-tile{{
+    overflow: hidden !important;
   }}
+
+  /* $5... 처럼 생략 표시 자연스럽게 */
+  .fs-kpi, .fs-value, .mm-value, .kpi-value, .tile-value{{
+    text-overflow: ellipsis !important;
+    overflow: hidden !important;
+  }}
+}}
+
+/* ✅ Market Signals - Metrics: 모바일 1열 */
+@media (max-width: 640px){{
+  .fs-grid{{
+    grid-template-columns: 1fr !important;
+  }}
+}}
+
+/* =========================
+   ✅ 7D Direction - Mobile Responsive Fix
+   (카드 겹침/오버플로우 방지)
+========================= */
+@media (max-width: 768px){{
+
+  /* wrapper padding 살짝 줄이기 */
+  .ra-7d-wrap{{
+    padding: 18px 14px 28px 14px !important;
+  }}
+
+  /* ✅ 3열 → 1열로 */
+  .ra-7d-grid{{
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }}
+
+  /* ✅ 카드 밖으로 삐져나오는 요소들 잘라내기 */
+  .ra-7d-card{{
+    overflow: hidden !important;
+  }}
+
+  /* 카드2(Up/Down)도 모바일에서는 1열로 */
+  .ra-split2{{
+    grid-template-columns: 1fr !important;
+  }}
+
+  /* 타일 높이도 모바일은 조금 낮춰도 안정적 */
+  :root{{
+    --ra-kpi-tile-h: 72px;
+  }}
+
+  /* 너무 큰 값 폰트 조금 줄이기(선택) */
+  .ra-kpi-val{{ font-size: 20px !important; }}
+  .ra-kpi-tile.big .ra-kpi-val{{ font-size: 24px !important; }}
 }}
 
 </style>
