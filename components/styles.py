@@ -223,8 +223,9 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
     grid-template-columns: 1fr !important;
   }}
 }}
+
 /* =========================
-   ✅ Risk Alert 7D - Up20/Down20 뱃지 정렬 (PC/모바일 유지 + 아이패드만 분리)
+   ✅ Risk Alert 7D - iPad에서 뱃지 2번째 줄로 내리기
 ========================= */
 
 /* grid/box 안에서 내용 때문에 옆 칸을 밀지 못하게 */
@@ -233,7 +234,7 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   min-width: 0 !important;
 }}
 
-/* 헤더 줄: 기본은 한 줄 */
+/* 기본(PC/모바일 포함): 한 줄 유지 */
 .ra-split-top{{
   display: flex !important;
   flex-wrap: nowrap !important;
@@ -241,39 +242,26 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
   gap: 8px !important;
 }}
 
-/* Up20 / Down20 라벨 */
+/* Up20/Down20 라벨은 줄바꿈 금지 */
 .ra-split-kicker{{
   flex: 0 0 auto !important;
   white-space: nowrap !important;
 }}
 
-/* ✅ 배지 기본 위치: 같은 줄 오른쪽 */
-.ra-split-top .ra-flag-badge,
-.ra-split-top .ra-badge,
-.ra-split-top .ra-pill,
-.ra-split-top .ra-flag{{
-  margin-left: auto !important;
-  flex: 0 0 auto !important;
-  white-space: nowrap !important;
-}}
-
-/* ✅ 아이패드/중간 폭에서만: 배지만 아래 줄로 */
+/* ✅ 아이패드/중간 폭에서만: "뱃지만" 다음 줄로 강제 */
 @media (min-width: 768px) and (max-width: 1100px){{
   .ra-split-top{{
-    align-items: flex-start !important;
+    flex-wrap: wrap !important;     /* 줄바꿈 허용 */
   }}
 
-  .ra-split-top .ra-flag-badge,
-  .ra-split-top .ra-badge,
-  .ra-split-top .ra-pill,
-  .ra-split-top .ra-flag{{
-    margin-left: 0 !important;
-    width: 100% !important;
-    margin-top: 6px !important;
+  /* _flag_badge()가 만들어내는 뱃지 요소를 통째로 한 줄 먹게 */
+  .ra-split-top > *:last-child{{
+    flex: 0 0 100% !important;      /* ✅ 핵심: 마지막요소(뱃지)를 100%로 */
+    max-width: 100% !important;
   }}
 }}
 
-/* overflow 잘림 방지 */
+/* 카드에서 overflow hidden이 걸려있으면 강제로 풀기 */
 .ra-7d-wrap .ra-split2 .ra-split-box{{
   overflow: visible !important;
 }}
