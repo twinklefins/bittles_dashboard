@@ -392,7 +392,14 @@ div[data-testid="stExpander"]{
   color: rgba(255,255,255,.68);
 }
 
+/* ✅ 3카드 높이 유동 유지 */
 .ra-7d-grid{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;     /* ✅ stretch 금지 */
+  margin-top: 12px;
+}
 
 /* 카드(개별 글로우 X) */
 .ra-7d-card{
