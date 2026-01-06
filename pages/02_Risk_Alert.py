@@ -404,12 +404,6 @@ div[data-testid="stExpander"]{
 .ra-7d-card-inner{
   padding: 14px;
 }
-             
-@media (max-width: 1200px){
-  .ra-7d-grid > .ra-7d-card:nth-child(3){
-    grid-column: 1 / -1 !important;
-  }
-}
 
 /* =========================
    KPI tiles
