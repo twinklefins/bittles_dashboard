@@ -225,43 +225,6 @@ div[data-testid="stSelectbox"] [data-testid="stWidgetLabel"] {{
 }}
 
 /* =========================
-   ✅ 7D Direction - Mobile Responsive Fix
-   (카드 겹침/오버플로우 방지)
-========================= */
-@media (max-width: 768px){{
-
-  /* wrapper padding 살짝 줄이기 */
-  .ra-7d-wrap{{
-    padding: 18px 14px 28px 14px !important;
-  }}
-
-  /* ✅ 3열 → 1열로 */
-  .ra-7d-grid{{
-    grid-template-columns: 1fr !important;
-    gap: 12px !important;
-  }}
-
-  /* ✅ 카드 밖으로 삐져나오는 요소들 잘라내기 */
-  .ra-7d-card{{
-    overflow: hidden !important;
-  }}
-
-  /* 카드2(Up/Down)도 모바일에서는 1열로 */
-  .ra-split2{{
-    grid-template-columns: 1fr !important;
-  }}
-
-  /* 타일 높이도 모바일은 조금 낮춰도 안정적 */
-  :root{{
-    --ra-kpi-tile-h: 72px;
-  }}
-
-  /* 너무 큰 값 폰트 조금 줄이기(선택) */
-  .ra-kpi-val{{ font-size: 20px !important; }}
-  .ra-kpi-tile.big .ra-kpi-val{{ font-size: 24px !important; }}
-}}
-
-/* =========================
    ✅ 7D Direction - Tablet(iPad) Layout Fix
    - 3열 → 2열
    - 3번째 카드(변동성)는 아래에서 2칸 span
